@@ -37,7 +37,7 @@ class CentralScheduler(object):
         # Average times for each function on each endpoint
         self._last_n_times = last_n_times
         self._runtimes = defaultdict(lambda: defaultdict(Queue))
-        self._avg_runtime = defaultdict(lambda: defaultdict(float))
+        self._avg_runtimes = defaultdict(lambda: defaultdict(float))
         self._num_executions = defaultdict(lambda: defaultdict(int))
 
         # Track pending tasks
@@ -52,7 +52,8 @@ class CentralScheduler(object):
         self.fx_serializer.use_custom('03\n', 'code')
 
         # Initialize scheduling strategy
-        self.strategy = init_strategy(strategy, endpoints=self._endpoints)
+        self.strategy = init_strategy(strategy, endpoints=self._endpoints,
+                                      runtimes=self._avg_runtimes)
         logger.info(f"Scheduler using strategy {strategy}")
 
     def blacklist(self, func, endpoint):
@@ -124,7 +125,7 @@ class CentralScheduler(object):
         while len(self._runtimes[func][end].queue) > self._last_n_times:
             self._runtimes[func][end].get()
         self._runtimes[func][end].put(new_runtime)
-        self._avg_runtime[func][end] = avg(self._runtimes[func][end])
+        self._avg_runtimes[func][end] = avg(self._runtimes[func][end])
 
         self._num_executions[func][end] += 1
 

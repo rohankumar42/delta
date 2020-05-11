@@ -85,4 +85,5 @@ if __name__ == "__main__":
 
     funcx_app.run(host='0.0.0.0', port=args.port, debug=args.debug,
                   threaded=False,
-                  extra_files=['central_scheduler.py', 'endpoints.yaml'])
+                  extra_files=['central_scheduler.py', 'strategies.py',
+                               'endpoints.yaml'])
