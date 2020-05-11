@@ -42,7 +42,6 @@ class CentralScheduler(object):
 
         # Track pending tasks
         self._pending = {}
-        self._pending_by_endpoint = defaultdict(Queue)
         # TODO: backup tasks?
 
         # Set logging levels
@@ -80,28 +79,35 @@ class CentralScheduler(object):
             'endpoint_id': endpoint,
         }
 
-        logger.debug('Sending func {} to endpoint {} with task id {}'
-                     .format(func, endpoint, task_id))
+        logger.info('Sending func {} to endpoint {} with task id {}'
+                    .format(func, endpoint, task_id))
         self._pending[task_id] = info
-        self._pending_by_endpoint[endpoint].put((task_id, info))
 
         return endpoint
 
     def log_status(self, task_id, data):
+        if task_id not in self._pending:
+            logger.warn('Ignoring unknown task id {}'.format(task_id))
+            return
+
         if 'result' in data:
             result = self.fx_serializer.deserialize(data['result'])
             self._record_result(task_id, result)
+            del self._pending[task_id]
         elif 'exception' in data:
             exception = self.fx_serializer.deserialize(data['exception'])
             self._record_exception(task_id, exception)
+            del self._pending[task_id]
         elif 'status' in data and data['status'] == 'PENDING':
             pass
         else:
             logger.error('Unexpected status message: {}'.format(data))
 
     def _record_result(self, task_id, result):
-        # TODO: update runtimes and remove pending
-        return NotImplemented
+        info = self._pending[task_id]
+        logger.info('Got result from {} for task {} with time {}'
+                    .format(info['endpoint_id'], task_id, result['runtime']))
+        self._update_runtimes(task_id, result['runtime'])
 
     def _record_exception(self, task_id, exception):
         try:
@@ -109,3 +115,26 @@ class CentralScheduler(object):
         except Exception as e:
             logger.error('Got exception on task {}: {}'
                          .format(task_id, e))
+
+    def _update_runtimes(self, task_id, new_runtime):
+        info = self._pending[task_id]
+        func = info['function_id']
+        end = info['endpoint_id']
+
+        while len(self._runtimes[func][end].queue) > self._last_n_times:
+            self._runtimes[func][end].get()
+        self._runtimes[func][end].put(new_runtime)
+        self._avg_runtime[func][end] = avg(self._runtimes[func][end])
+
+        self._num_executions[func][end] += 1
+
+
+##############################################################################
+#                           Utility Functions
+##############################################################################
+
+def avg(x):
+    if isinstance(x, Queue):
+        x = x.queue
+
+    return sum(x) / len(x)

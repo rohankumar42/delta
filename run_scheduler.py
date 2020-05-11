@@ -84,4 +84,5 @@ if __name__ == "__main__":
                                  log_level=args.log_level)
 
     funcx_app.run(host='0.0.0.0', port=args.port, debug=args.debug,
-                  threaded=False)
+                  threaded=False,
+                  extra_files=['central_scheduler.py', 'endpoints.yaml'])
