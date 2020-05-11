@@ -1,9 +1,7 @@
-import yaml
-import json
+import time
 import logging
-import argparse
-import requests
-from flask import Flask, request
+from collections import defaultdict
+from queue import Queue
 
 try:
     from termcolor import colored
@@ -11,71 +9,103 @@ except ImportError:
     def colored(x, *args, **kwargs):
         return x
 
+from funcx import FuncXClient
+from funcx.serialize import FuncXSerializer
 from strategies import init_strategy
 
-funcx_app = Flask(__name__)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
-ch.setFormatter(logging.Formatter(colored("%(message)s", 'yellow')))
-funcx_app.logger.addHandler(ch)
-funcx_app.logger.setLevel('DEBUG')
+ch.setFormatter(logging.Formatter(
+    colored("[SCHEDULER] %(message)s", 'yellow')))
+logger.addHandler(ch)
 
 
-FUNCX_API = 'https://funcx.org/api/v1'
+class CentralScheduler(object):
 
+    def __init__(self, fxc=None, endpoints=None, strategy='round-robin',
+                 last_n_times=3, log_level='INFO', *args, **kwargs):
+        self._fxc = fxc or FuncXClient(*args, **kwargs)
 
-def forward_request(request, route=None, headers=None, data=None):
-    url = f'{FUNCX_API}{route or request.path}'
-    headers = headers or request.headers
-    data = data or request.data
+        # List of all FuncX endpoints we can execute on
+        self._endpoints = list(set(endpoints or []))
 
-    return requests.request(request.method, url=url, headers=headers,
-                            data=data)
+        # Track which endpoints a function can't run on
+        self._blacklists = defaultdict(set)
 
+        # Average times for each function on each endpoint
+        self._last_n_times = last_n_times
+        self._runtimes = defaultdict(lambda: defaultdict(Queue))
+        self._avg_runtime = defaultdict(lambda: defaultdict(float))
+        self._num_executions = defaultdict(lambda: defaultdict(int))
 
-@funcx_app.route('/', methods=['GET'])
-def base():
-    return 'OK'
+        # Track pending tasks
+        self._pending = {}
+        self._pending_by_endpoint = defaultdict(Queue)
+        # TODO: backup tasks?
 
+        # Set logging levels
+        logger.setLevel(log_level)
 
-@funcx_app.route('/<task_id>/status', methods=['GET'])
-def status(task_id):
-    res = forward_request(request)
-    SCHEDULER.log_status(task_id, json.loads(res.text))
-    return res.text
+        # Intialize serializer
+        self.fx_serializer = FuncXSerializer()
+        self.fx_serializer.use_custom('03\n', 'code')
 
+        # Initialize scheduling strategy
+        self.strategy = init_strategy(strategy, endpoints=self._endpoints)
+        logger.info(f"Scheduler using strategy {strategy}")
 
-@funcx_app.route('/register_function', methods=['POST'])
-def reg_function():
-    res = forward_request(request)
-    return res.text
+    def blacklist(self, func, endpoint):
+        # TODO: use blacklists in scheduling
+        if endpoint not in self._endpoints:
+            logger.error('Cannot blacklist unknown endpoint {}'
+                         .format(endpoint))
+        else:
+            logger.info('Blacklisting endpoint {} for function {}'
+                        .format(endpoint, func))
+            self._blacklists[func].add(endpoint)
 
+        # TODO: return response message?
 
-@funcx_app.route('/submit', methods=['POST'])
-def submit():
-    data = json.loads(request.data)
-    if 'endpoint' not in data or data['endpoint'] == 'UNDECIDED':
-        data['endpoint'] = SCHEDULER.choose_endpoint(data['func'])
+    def choose_endpoint(self, func):
+        endpoint = self.strategy.choose_endpoint(func)
+        logger.debug('Choosing endpoint {} for func {}'.format(endpoint, func))
+        return endpoint
 
-    res = forward_request(request, data=json.dumps(data))
-    funcx_app.logger.debug('Sent function {} to endpoint {} with task_id {}'
-                           .format(data['func'], data['endpoint'],
-                                   json.loads(res.text)['task_uuid']))
-    return res.text
+    def log_submission(self, func, endpoint, task_id):
+        info = {
+            'time_sent': time.time(),
+            'function_id': func,
+            'endpoint_id': endpoint,
+        }
 
+        logger.debug('Sending func {} to endpoint {} with task id {}'
+                     .format(func, endpoint, task_id))
+        self._pending[task_id] = info
+        self._pending_by_endpoint[endpoint].put((task_id, info))
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--port', type=int, default=5000)
-    parser.add_argument('-d', '--debug', action='store_true', default=True)
-    parser.add_argument('--endpoints', type=str, default='endpoints.yaml')
-    parser.add_argument('-s', '--strategy', type=str, default='round-robin')
-    args = parser.parse_args()
+        return endpoint
 
-    with open(args.endpoints) as fh:
-        endpoints = yaml.safe_load(fh)
+    def log_status(self, task_id, data):
+        if 'result' in data:
+            result = self.fx_serializer.deserialize(data['result'])
+            self._record_result(task_id, result)
+        elif 'exception' in data:
+            exception = self.fx_serializer.deserialize(data['exception'])
+            self._record_exception(task_id, exception)
+        elif 'status' in data and data['status'] == 'PENDING':
+            pass
+        else:
+            logger.error('Unexpected status message: {}'.format(data))
 
-    global SCHEDULER
-    SCHEDULER = init_strategy(args.strategy, endpoints=endpoints)
+    def _record_result(self, task_id, result):
+        # TODO: update runtimes and remove pending
+        return NotImplemented
 
-    funcx_app.run(host='0.0.0.0', port=args.port, debug=args.debug,
-                  threaded=False)
+    def _record_exception(self, task_id, exception):
+        try:
+            exception.reraise()
+        except Exception as e:
+            logger.error('Got exception on task {}: {}'
+                         .format(task_id, e))
