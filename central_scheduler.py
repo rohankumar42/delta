@@ -46,9 +46,9 @@ class CentralScheduler(object):
         self._pending = {}
         self._pending_by_endpoint = defaultdict(set)
         self._last_task_sent = {}
-        # Estimated error in the ETA of an endpoint. Updated every
-        # time a task result is received from an endpoint.
-        self._ETA_offset = defaultdict(float)
+        # Estimated error in the pending-task time of an endpoint.
+        # Updated every time a task result is received from an endpoint.
+        self._queue_error = defaultdict(float)
         # TODO: backup tasks?
 
         # Set logging levels
@@ -155,8 +155,8 @@ class CentralScheduler(object):
                 self._last_task_sent[endpoint] not in self._pending:
             return time.time()
         else:
-            last_task = self._last_task_sent[endpoint]
-            return self._pending[last_task]['ETA'] + self._ETA_offset[endpoint]
+            last = self._last_task_sent[endpoint]
+            return self._pending[last]['ETA'] + self._queue_error[endpoint]
 
     def _record_completed(self, task_id):
         info = self._pending[task_id]
@@ -167,15 +167,15 @@ class CentralScheduler(object):
 
         # If this is the last pending task on this endpoint, reset ETA offset
         if len(self._pending_by_endpoint[endpoint]) == 1:
-            self._ETA_offset[endpoint] = 0.0
+            self._queue_error[endpoint] = 0.0
         else:
             prediction_error = time.time() - self._pending[task_id]['ETA']
-            self._ETA_offset[endpoint] = prediction_error
+            self._queue_error[endpoint] = prediction_error
 
         logger.info('Task exec time: expected = {:.3f}, actual = {:.3f}'
                     .format(info['ETA'] - info['time_sent'],
                             time.time() - info['time_sent']))
-        # logger.info(f'ETA_offset = {self._ETA_offset[endpoint]:.5f}')
+        # logger.info(f'ETA_offset = {self._queue_error[endpoint]:.3f}')
 
         del self._pending[task_id]
         self._pending_by_endpoint[endpoint].remove(task_id)
@@ -201,7 +201,6 @@ def avg(x):
     if isinstance(x, Queue):
         x = x.queue
 
-    print(x)
     return sum(x) / len(x)
 
 

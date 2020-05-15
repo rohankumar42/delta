@@ -21,7 +21,7 @@ if __name__ == "__main__":
 
     func = client.register_function(loop, function_name='loop')
 
-    SIZE = 2 * 10 ** 1
+    SIZE = 2 * 10 ** 5
     NUM_TASKS = 100
     NUM_ENDPOINTS = 4
 
