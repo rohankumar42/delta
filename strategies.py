@@ -12,7 +12,7 @@ class Strategy(object):
             raise ValueError("List of endpoints cannot be empty")
         self.endpoints = endpoints
 
-    def choose_endpoint(self, function_id, *args, **kwargs):
+    def choose_endpoint(self, func, payload):
         raise NotImplementedError
 
     def add_endpoint(self, endpoint):
@@ -29,7 +29,7 @@ class RoundRobin(Strategy):
         super().__init__(endpoints=endpoints)
         self.next = 0
 
-    def choose_endpoint(self, function_id):
+    def choose_endpoint(self, func, payload):
         endpoint = self.endpoints[self.next % len(self.endpoints)]
         self.next += 1
         return {'endpoint': endpoint}
@@ -41,18 +41,18 @@ class FastestEndpoint(Strategy):
                  *args, **kwargs):
         super().__init__(endpoints=endpoints)
         assert(callable(runtime_predictor))
-        self.runtime_predictor = runtime_predictor
+        self.runtime = runtime_predictor
         self.next_endpoint = defaultdict(int)
 
-    def choose_endpoint(self, function_id, *args, **kwargs):
-        times = [(ep, self.runtime_predictor(func=function_id, endpoint=ep))
+    def choose_endpoint(self, func, payload):
+        times = [(ep, self.runtime(func=func, endpoint=ep, payload=payload))
                  for ep in self.endpoints]
 
         # Try each endpoint once, and then start choosing the best one
         if len(times) < len(self.endpoints):
-            endpoint = self.endpoints[self.next_endpoint[function_id]]
-            self.next_endpoint[function_id] += 1
-            self.next_endpoint[function_id] %= len(self.endpoints)
+            endpoint = self.endpoints[self.next_endpoint[func]]
+            self.next_endpoint[func] += 1
+            self.next_endpoint[func] %= len(self.endpoints)
         else:
             endpoint, _ = min(times, key=lambda x: x[1])
 
@@ -66,35 +66,35 @@ class SmallestETA(Strategy):
         super().__init__(endpoints)
         assert(callable(runtime_predictor))
         assert(callable(queue_predictor))
-        self.runtime_predictor = runtime_predictor
+        self.runtime = runtime_predictor
         self.queue_predictor = queue_predictor
         self.next_endpoint = defaultdict(int)
 
-    def choose_endpoint(self, function_id, *args, **kwargs):
+    def choose_endpoint(self, func, payload, *args, **kwargs):
         res = {}
-        times = [(ep, self.runtime_predictor(func=function_id, endpoint=ep))
+        times = [(ep, self.runtime(func=func, endpoint=ep, payload=payload))
                  for ep in self.endpoints]
 
         # Try each endpoint once, and then start choosing the one with
         # the smallest predicted ETA
         if len(times) < len(self.endpoints):
-            res['endpoint'] = self.endpoints[self.next_endpoint[function_id]]
-            self.next_endpoint[function_id] += 1
-            self.next_endpoint[function_id] %= len(self.endpoints)
+            res['endpoint'] = self.endpoints[self.next_endpoint[func]]
+            self.next_endpoint[func] += 1
+            self.next_endpoint[func] %= len(self.endpoints)
         else:
-            ETAs = [(ep, self.predict_ETA(function_id, ep))
+            ETAs = [(ep, self.predict_ETA(func, ep, payload))
                     for ep in self.endpoints]
             res['endpoint'], res['ETA'] = min(ETAs, key=lambda x: x[1])
 
         return res
 
-    def predict_ETA(self, func, endpoint):
+    def predict_ETA(self, func, endpoint, payload):
         # TODO: use function input for prediction
         # TODO: better task ETA prediction by including data movement,
         # latency, start-up, and other costs
 
         t_pending = self.queue_predictor(endpoint)
-        t_run = self.runtime_predictor(func=func, endpoint=endpoint)
+        t_run = self.runtime(func=func, endpoint=endpoint, payload=payload)
 
         return t_pending + t_run + FUNCX_LATENCY
 

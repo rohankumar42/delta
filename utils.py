@@ -2,6 +2,12 @@ import time
 from datetime import datetime
 from queue import Queue
 
+try:
+    from termcolor import colored
+except ImportError:
+    def colored(x, *args, **kwargs):
+        return x
+
 
 def avg(x):
     if isinstance(x, Queue):

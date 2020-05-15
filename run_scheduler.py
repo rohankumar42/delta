@@ -55,12 +55,13 @@ def reg_function():
 def submit():
     data = json.loads(request.data)
     if 'endpoint' not in data or data['endpoint'] == 'UNDECIDED':
-        choice = SCHEDULER.choose_endpoint(data['func'])
+        choice = SCHEDULER.choose_endpoint(data['func'], data['payload'])
         data['endpoint'] = choice['endpoint']
 
     res_str = forward_request(request, data=json.dumps(data))
     res = json.loads(res_str.text)
-    SCHEDULER.log_submission(data['func'], choice, res['task_uuid'])
+    SCHEDULER.log_submission(data['func'], data['payload'],
+                             choice, res['task_uuid'])
     res['endpoint'] = data['endpoint']
     return json.dumps(res)
 

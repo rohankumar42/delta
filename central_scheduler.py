@@ -2,15 +2,9 @@ import time
 import logging
 from collections import defaultdict
 
-try:
-    from termcolor import colored
-except ImportError:
-    def colored(x, *args, **kwargs):
-        return x
-
 from funcx import FuncXClient
 from funcx.serialize import FuncXSerializer
-from utils import fmt_time
+from utils import fmt_time, colored
 from strategies import init_strategy
 from predictors import init_runtime_predictor
 
@@ -76,13 +70,13 @@ class CentralScheduler(object):
 
         # TODO: return response message?
 
-    def choose_endpoint(self, func):
-        choice = self.strategy.choose_endpoint(func)
+    def choose_endpoint(self, func, payload):
+        choice = self.strategy.choose_endpoint(func, payload)
         logger.debug('Choosing endpoint {} for func {}'
                      .format(choice['endpoint'], func))
         return choice
 
-    def log_submission(self, func, choice, task_id):
+    def log_submission(self, func, payload, choice, task_id):
         endpoint = choice['endpoint']
         expected_ETA = choice.get('ETA', time.time())
 
@@ -96,6 +90,7 @@ class CentralScheduler(object):
             'ETA': expected_ETA,
             'function_id': func,
             'endpoint_id': endpoint,
+            'payload': payload,
         }
         self._pending[task_id] = info
         self._pending_by_endpoint[endpoint].add(task_id)
