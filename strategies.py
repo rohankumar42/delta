@@ -1,7 +1,11 @@
 from collections import defaultdict
+from predictors import RuntimePredictor
 
 
-class BaseStrategy(object):
+FUNCX_LATENCY = 0.5  # Estimated overhead of executing task
+
+
+class Strategy(object):
 
     def __init__(self, endpoints):
         if len(endpoints) == 0:
@@ -19,7 +23,7 @@ class BaseStrategy(object):
             self.endpoints.remove(endpoint)
 
 
-class RoundRobin(BaseStrategy):
+class RoundRobin(Strategy):
 
     def __init__(self, endpoints, *args, **kwargs):
         super().__init__(endpoints=endpoints)
@@ -31,15 +35,18 @@ class RoundRobin(BaseStrategy):
         return {'endpoint': endpoint}
 
 
-class FastestEndpoint(BaseStrategy):
+class FastestEndpoint(Strategy):
 
-    def __init__(self, endpoints, runtimes, *args, **kwargs):
+    def __init__(self, endpoints, runtime_predictor: RuntimePredictor,
+                 *args, **kwargs):
         super().__init__(endpoints=endpoints)
-        self.runtimes = runtimes
+        assert(callable(runtime_predictor))
+        self.runtime_predictor = runtime_predictor
         self.next_endpoint = defaultdict(int)
 
     def choose_endpoint(self, function_id, *args, **kwargs):
-        times = list(self.runtimes[function_id].items())
+        times = [(ep, self.runtime_predictor(func=function_id, endpoint=ep))
+                 for ep in self.endpoints]
 
         # Try each endpoint once, and then start choosing the best one
         if len(times) < len(self.endpoints):
@@ -52,18 +59,21 @@ class FastestEndpoint(BaseStrategy):
         return {'endpoint': endpoint}
 
 
-class SmallestETA(BaseStrategy):
+class SmallestETA(Strategy):
 
-    def __init__(self, endpoints, runtimes, ETA_predictor, *args, **kwargs):
+    def __init__(self, endpoints, runtime_predictor: RuntimePredictor,
+                 queue_predictor, *args, **kwargs):
         super().__init__(endpoints)
-        assert(callable(ETA_predictor))
-        self.predict_ETA = ETA_predictor
-        self.runtimes = runtimes
+        assert(callable(runtime_predictor))
+        assert(callable(queue_predictor))
+        self.runtime_predictor = runtime_predictor
+        self.queue_predictor = queue_predictor
         self.next_endpoint = defaultdict(int)
 
     def choose_endpoint(self, function_id, *args, **kwargs):
         res = {}
-        times = list(self.runtimes[function_id].items())
+        times = [(ep, self.runtime_predictor(func=function_id, endpoint=ep))
+                 for ep in self.endpoints]
 
         # Try each endpoint once, and then start choosing the one with
         # the smallest predicted ETA
@@ -77,6 +87,16 @@ class SmallestETA(BaseStrategy):
             res['endpoint'], res['ETA'] = min(ETAs, key=lambda x: x[1])
 
         return res
+
+    def predict_ETA(self, func, endpoint):
+        # TODO: use function input for prediction
+        # TODO: better task ETA prediction by including data movement,
+        # latency, start-up, and other costs
+
+        t_pending = self.queue_predictor(endpoint)
+        t_run = self.runtime_predictor(func=func, endpoint=endpoint)
+
+        return t_pending + t_run + FUNCX_LATENCY
 
 
 def init_strategy(strategy, *args, **kwargs):

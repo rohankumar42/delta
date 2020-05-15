@@ -71,6 +71,8 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--debug', action='store_true', default=False)
     parser.add_argument('--endpoints', type=str, default='endpoints.yaml')
     parser.add_argument('-s', '--strategy', type=str, default='round-robin')
+    parser.add_argument('-rp', '--predictor', type=str,
+                        default='rolling-average')
     parser.add_argument('--last-n', type=int, default=3)
     parser.add_argument('--log-level', type=str, default='INFO')
     args = parser.parse_args()
@@ -81,7 +83,8 @@ if __name__ == "__main__":
     global SCHEDULER
     SCHEDULER = CentralScheduler(endpoints=endpoints,
                                  strategy=args.strategy,
-                                 last_n_times=args.last_n,
+                                 runtime_predictor=args.predictor,
+                                 last_n=args.last_n,
                                  log_level=args.log_level)
 
     funcx_app.run(host='0.0.0.0', port=args.port, debug=args.debug,

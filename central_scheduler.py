@@ -1,8 +1,6 @@
 import time
-from datetime import datetime
 import logging
 from collections import defaultdict
-from queue import Queue
 
 try:
     from termcolor import colored
@@ -12,7 +10,9 @@ except ImportError:
 
 from funcx import FuncXClient
 from funcx.serialize import FuncXSerializer
+from utils import fmt_time
 from strategies import init_strategy
+from predictors import init_runtime_predictor
 
 
 logger = logging.getLogger(__name__)
@@ -24,10 +24,10 @@ logger.addHandler(ch)
 
 
 class CentralScheduler(object):
-    FUNCX_LATENCY = 0.5  # Estimated overhead of executing task
 
     def __init__(self, fxc=None, endpoints=None, strategy='round-robin',
-                 last_n_times=3, log_level='INFO', *args, **kwargs):
+                 runtime_predictor='rolling-average', last_n=3,
+                 log_level='INFO', *args, **kwargs):
         self._fxc = fxc or FuncXClient(*args, **kwargs)
 
         # List of all FuncX endpoints we can execute on
@@ -35,12 +35,6 @@ class CentralScheduler(object):
 
         # Track which endpoints a function can't run on
         self._blacklists = defaultdict(set)
-
-        # Average times for each function on each endpoint
-        self._last_n_times = last_n_times
-        self._runtimes = defaultdict(lambda: defaultdict(Queue))
-        self._avg_runtime = defaultdict(lambda: defaultdict(float))
-        self._num_executions = defaultdict(lambda: defaultdict(int))
 
         # Track pending tasks
         self._pending = {}
@@ -58,10 +52,16 @@ class CentralScheduler(object):
         self.fx_serializer = FuncXSerializer()
         self.fx_serializer.use_custom('03\n', 'code')
 
+        # Initialize runtime predictor
+        self.runtime_predictor = init_runtime_predictor(runtime_predictor,
+                                                        endpoints=endpoints,
+                                                        last_n=last_n)
+        logger.info(f"Runtime predictor using strategy {runtime_predictor}")
+
         # Initialize scheduling strategy
         self.strategy = init_strategy(strategy, endpoints=self._endpoints,
-                                      runtimes=self._avg_runtime,
-                                      ETA_predictor=self._predict_ETA)
+                                      runtime_predictor=self.runtime_predictor,
+                                      queue_predictor=self.queue_delay)
         logger.info(f"Scheduler using strategy {strategy}")
 
     def blacklist(self, func, endpoint):
@@ -110,12 +110,12 @@ class CentralScheduler(object):
 
         if 'result' in data:
             result = self.fx_serializer.deserialize(data['result'])
-
+            runtime = result['runtime']
             logger.info('Got result from {} for task {} with time {}'
                         .format(self._pending[task_id]['endpoint_id'],
-                                task_id, result['runtime']))
+                                task_id, runtime))
 
-            self._update_runtimes(task_id, result['runtime'])
+            self.runtime_predictor.update(self._pending[task_id], runtime)
             self._record_completed(task_id)
 
         elif 'exception' in data:
@@ -134,20 +134,7 @@ class CentralScheduler(object):
         else:
             logger.error('Unexpected status message: {}'.format(data))
 
-    def _predict_ETA(self, func, endpoint):
-        # TODO: use function input for prediction
-        # TODO: better task ETA prediction by including data movement,
-        # latency, start-up, and other costs
-
-        t_pending = self._queue_delay(endpoint)
-        t_run = self._avg_runtime[func][endpoint]
-
-        # logger.info('[{} s], QD = {} s, RT = {:.2f} s, ETA = {} s'
-        # .format(fmt_time(), fmt_time(t_pending), t_run,
-        # fmt_time(t_pending + t_run)))
-        return t_pending + t_run + self.FUNCX_LATENCY
-
-    def _queue_delay(self, endpoint):
+    def queue_delay(self, endpoint):
         # If there are no pending tasks on endpoint, no queue delay.
         # Otherwise, queue delay is the ETA of most recent task,
         # plus the estimated error in the ETA prediction.
@@ -179,30 +166,3 @@ class CentralScheduler(object):
 
         del self._pending[task_id]
         self._pending_by_endpoint[endpoint].remove(task_id)
-
-    def _update_runtimes(self, task_id, new_runtime):
-        info = self._pending[task_id]
-        func = info['function_id']
-        end = info['endpoint_id']
-
-        while len(self._runtimes[func][end].queue) > self._last_n_times:
-            self._runtimes[func][end].get()
-        self._runtimes[func][end].put(new_runtime)
-        self._avg_runtime[func][end] = avg(self._runtimes[func][end])
-
-        self._num_executions[func][end] += 1
-
-
-##############################################################################
-#                           Utility Functions
-##############################################################################
-
-def avg(x):
-    if isinstance(x, Queue):
-        x = x.queue
-
-    return sum(x) / len(x)
-
-
-def fmt_time(t=None, fmt='%H:%M:%S'):
-    return datetime.fromtimestamp(t or time.time()).strftime(fmt)
