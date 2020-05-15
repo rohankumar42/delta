@@ -1,4 +1,6 @@
+import time
 from funcx.sdk.smart_client import FuncXSmartClient
+from funcx.sdk.client import FuncXClient
 
 
 def f(x):
@@ -15,17 +17,35 @@ def loop(n):
 
 if __name__ == "__main__":
     client = FuncXSmartClient(funcx_service_address='http://localhost:5000',
-                              force_login=False)
+                              force_login=False, log_level='WARN')
+
     func = client.register_function(loop, function_name='loop')
 
+    SIZE = 2 * 10 ** 1
+    NUM_TASKS = 100
+    NUM_ENDPOINTS = 4
+
+    start = time.time()
+    for _ in range(NUM_ENDPOINTS):
+        task = client.run(SIZE, function_id=func)
+        client.get_result(task, block=True)
+    print('Warmed up in {:.3f} s'.format(time.time() - start))
+
     tasks = []
-    for i in range(10):
-        task = client.run(10 ** 5, function_id=func)
-        # i, function_id='6669e9f2-cc6b-4e7d-b117-bd0aaf0dbc78')
+    overall_start = time.time()
+    for i in range(NUM_TASKS):
+        start = time.time()
+        task = client.run(SIZE, function_id=func)
+        print('Time to schedule: {:.3f} s'.format(time.time() - start))
         tasks.append(task)
 
+        # time.sleep(0.3)
+
     for task in tasks:
+        print('Waiting on task:', task)
         res = client.get_result(task, block=True)
         print('Got res:', res)
+
+    print('Total time: {:.3f}'.format(time.time() - overall_start))
 
     client.stop()

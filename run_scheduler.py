@@ -18,6 +18,7 @@ ch = logging.StreamHandler()
 ch.setFormatter(logging.Formatter(colored("%(message)s", 'yellow')))
 funcx_app.logger.addHandler(ch)
 funcx_app.logger.setLevel('DEBUG')
+logging.getLogger('werkzeug').setLevel('ERROR')
 
 
 FUNCX_API = 'https://funcx.org/api/v1'
@@ -54,12 +55,12 @@ def reg_function():
 def submit():
     data = json.loads(request.data)
     if 'endpoint' not in data or data['endpoint'] == 'UNDECIDED':
-        data['endpoint'] = SCHEDULER.choose_endpoint(data['func'])
+        choice = SCHEDULER.choose_endpoint(data['func'])
+        data['endpoint'] = choice['endpoint']
 
     res_str = forward_request(request, data=json.dumps(data))
     res = json.loads(res_str.text)
-    SCHEDULER.log_submission(data['func'], data['endpoint'],
-                             res['task_uuid'])
+    SCHEDULER.log_submission(data['func'], choice, res['task_uuid'])
     res['endpoint'] = data['endpoint']
     return json.dumps(res)
 
@@ -84,6 +85,6 @@ if __name__ == "__main__":
                                  log_level=args.log_level)
 
     funcx_app.run(host='0.0.0.0', port=args.port, debug=args.debug,
-                  threaded=False,
+                  threaded=True,
                   extra_files=['central_scheduler.py', 'strategies.py',
                                'endpoints.yaml'])
