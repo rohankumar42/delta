@@ -75,6 +75,7 @@ if __name__ == "__main__":
     parser.add_argument('-rp', '--predictor', type=str,
                         default='rolling-average')
     parser.add_argument('--last-n', type=int, default=3)
+    parser.add_argument('--train-every', type=int, default=1)
     parser.add_argument('--log-level', type=str, default='INFO')
     args = parser.parse_args()
 
@@ -86,6 +87,7 @@ if __name__ == "__main__":
                                  strategy=args.strategy,
                                  runtime_predictor=args.predictor,
                                  last_n=args.last_n,
+                                 train_every=args.train_every,
                                  log_level=args.log_level)
 
     funcx_app.run(host='0.0.0.0', port=args.port, debug=args.debug,

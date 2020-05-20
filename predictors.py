@@ -47,6 +47,8 @@ class RollingAverage(RuntimePredictor):
 class InputLength(RuntimePredictor):
 
     def __init__(self, endpoints, train_every=1, *args, **kwargs):
+        # TODO: ensure that the number of data points stored stays under some
+        # threshold, to guarantee low memory usage and fast training
         super().__init__(endpoints)
         self.lengths = defaultdict(lambda: defaultdict(list))
         self.runtimes = defaultdict(lambda: defaultdict(list))

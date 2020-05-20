@@ -20,7 +20,7 @@ logger.addHandler(ch)
 class CentralScheduler(object):
 
     def __init__(self, fxc=None, endpoints=None, strategy='round-robin',
-                 runtime_predictor='rolling-average', last_n=3,
+                 runtime_predictor='rolling-average', last_n=3, train_every=1,
                  log_level='INFO', *args, **kwargs):
         self._fxc = fxc or FuncXClient(*args, **kwargs)
 
@@ -47,14 +47,15 @@ class CentralScheduler(object):
         self.fx_serializer.use_custom('03\n', 'code')
 
         # Initialize runtime predictor
-        self.runtime_predictor = init_runtime_predictor(runtime_predictor,
-                                                        endpoints=endpoints,
-                                                        last_n=last_n)
+        self.predictor = init_runtime_predictor(runtime_predictor,
+                                                endpoints=endpoints,
+                                                last_n=last_n,
+                                                train_every=train_every)
         logger.info(f"Runtime predictor using strategy {runtime_predictor}")
 
         # Initialize scheduling strategy
         self.strategy = init_strategy(strategy, endpoints=self._endpoints,
-                                      runtime_predictor=self.runtime_predictor,
+                                      runtime_predictor=self.predictor,
                                       queue_predictor=self.queue_delay)
         logger.info(f"Scheduler using strategy {strategy}")
 
@@ -110,7 +111,7 @@ class CentralScheduler(object):
                         .format(self._pending[task_id]['endpoint_id'],
                                 task_id, runtime))
 
-            self.runtime_predictor.update(self._pending[task_id], runtime)
+            self.predictor.update(self._pending[task_id], runtime)
             self._record_completed(task_id)
 
         elif 'exception' in data:
