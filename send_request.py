@@ -24,22 +24,26 @@ def loop_length(s):
 
 if __name__ == "__main__":
     client = FuncXSmartClient(funcx_service_address='http://localhost:5000',
-                              force_login=False, log_level='WARN')
+                              force_login=False, log_level='INFO',
+                              batch_status=True)
     random.seed(100)
 
     func = client.register_function(loop, function_name='loop')
 
     # INPUTS = ['1' * 1, '1' * 4, '1' * 7]
-    INPUTS = [1, 10 ** 4, 10 ** 8]
+    INPUTS = [10 ** 0, 10 ** 4]
     random.shuffle(INPUTS)
-    NUM_TASKS = 100
+    NUM_TASKS = 0
     NUM_ENDPOINTS = 4
 
     start = time.time()
+    warmup_batch = client.create_batch()
     for _ in range(NUM_ENDPOINTS):
         for x in INPUTS:
-            task = client.run(x, function_id=func)
-            client.get_result(task, block=True)
+            task = warmup_batch.add(x, function_id=func)
+    task_ids = client.batch_run(warmup_batch)
+    for task_id in task_ids:
+        client.get_result(task_id, block=True)
     print('Warmed up in {:.3f} s'.format(time.time() - start))
 
     tasks = []

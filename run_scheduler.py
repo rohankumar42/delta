@@ -45,6 +45,14 @@ def status(task_id):
     return res.text
 
 
+@funcx_app.route('/batch_status', methods=['POST'])
+def batch_status():
+    res = forward_request(request)
+    for task_id, status in json.loads(res.text)['results'].items():
+        SCHEDULER.log_status(task_id, status)
+    return res.text
+
+
 @funcx_app.route('/register_function', methods=['POST'])
 def reg_function():
     res = forward_request(request)
@@ -82,7 +90,6 @@ def batch_submit():
         data['endpoints'].append(choice['endpoint'])
 
     res_str = forward_request(request, data=json.dumps(data))
-    print(res_str)
     res = json.loads(res_str.text)
 
     for i in range(n):
