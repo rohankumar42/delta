@@ -21,7 +21,7 @@ funcx_app.logger.setLevel('DEBUG')
 logging.getLogger('werkzeug').setLevel('ERROR')
 
 
-FUNCX_API = 'https://funcx.org/api/v1'
+FUNCX_API = 'https://dev.funcx.org/api/v1'
 
 
 def forward_request(request, route=None, headers=None, data=None):
@@ -54,15 +54,42 @@ def reg_function():
 @funcx_app.route('/submit', methods=['POST'])
 def submit():
     data = json.loads(request.data)
-    if 'endpoint' not in data or data['endpoint'] == 'UNDECIDED':
-        choice = SCHEDULER.choose_endpoint(data['func'], data['payload'])
-        data['endpoint'] = choice['endpoint']
+    assert (data['endpoint'] == 'UNDECIDED')
+    choice = SCHEDULER.choose_endpoint(data['func'], data['payload'])
+    data['endpoint'] = choice['endpoint']
 
     res_str = forward_request(request, data=json.dumps(data))
     res = json.loads(res_str.text)
     SCHEDULER.log_submission(data['func'], data['payload'],
                              choice, res['task_uuid'])
     res['endpoint'] = data['endpoint']
+    return json.dumps(res)
+
+
+@funcx_app.route('/batch_run', methods=['POST'])
+def batch_submit():
+    data = json.loads(request.data)
+    assert(all(e == 'UNDECIDED' for e in data['endpoints']))
+    n = len(data['functions'])
+    data['endpoints'] = []
+    choices = []
+
+    # TODO: smarter scheduling for batch submissions
+    for i in range(n):
+        choice = SCHEDULER.choose_endpoint(data['functions'][i],
+                                           data['payloads'][i])
+        choices.append(choice)
+        data['endpoints'].append(choice['endpoint'])
+
+    res_str = forward_request(request, data=json.dumps(data))
+    print(res_str)
+    res = json.loads(res_str.text)
+
+    for i in range(n):
+        SCHEDULER.log_submission(data['functions'][i], data['payloads'][i],
+                                 choices[i], res['task_uuids'][i])
+
+    res['endpoints'] = data['endpoints']
     return json.dumps(res)
 
 

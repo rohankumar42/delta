@@ -33,7 +33,7 @@ class CentralScheduler(object):
         # Track pending tasks
         self._pending = {}
         self._pending_by_endpoint = defaultdict(set)
-        self._last_task_sent = {}
+        self._last_task_ETA = {}
         # Estimated error in the pending-task time of an endpoint.
         # Updated every time a task result is received from an endpoint.
         self._queue_error = defaultdict(float)
@@ -73,14 +73,17 @@ class CentralScheduler(object):
 
     def choose_endpoint(self, func, payload):
         choice = self.strategy.choose_endpoint(func, payload)
-        choice['time_sent'] = time.time()
         logger.debug('Choosing endpoint {} for func {}'
                      .format(choice['endpoint'], func))
+        choice['time_sent'] = time.time()
+        choice['ETA'] = choice.get('ETA', time.time())
+
+        # Record endpoint ETA for queue-delay prediction
+        self._last_task_ETA[choice['endpoint']] = choice['ETA']
         return choice
 
     def log_submission(self, func, payload, choice, task_id):
         endpoint = choice['endpoint']
-        expected_ETA = choice.get('ETA', time.time())
 
         logger.info('Sending func {} to endpoint {} with task id {}'
                     .format(func, endpoint, task_id))
@@ -89,14 +92,13 @@ class CentralScheduler(object):
 
         info = {
             'time_sent': choice['time_sent'],
-            'ETA': expected_ETA,
+            'ETA': choice['ETA'],
             'function_id': func,
             'endpoint_id': endpoint,
             'payload': payload,
         }
         self._pending[task_id] = info
         self._pending_by_endpoint[endpoint].add(task_id)
-        self._last_task_sent[endpoint] = task_id
 
         return endpoint
 
@@ -135,12 +137,10 @@ class CentralScheduler(object):
         # If there are no pending tasks on endpoint, no queue delay.
         # Otherwise, queue delay is the ETA of most recent task,
         # plus the estimated error in the ETA prediction.
-        if endpoint not in self._last_task_sent or \
-                self._last_task_sent[endpoint] not in self._pending:
+        if len(self._pending_by_endpoint[endpoint]) == 0:
             delay = time.time()
         else:
-            last = self._last_task_sent[endpoint]
-            delay = self._pending[last]['ETA'] + self._queue_error[endpoint]
+            delay = self._last_task_ETA[endpoint] + self._queue_error[endpoint]
             delay = max(delay, time.time())
 
         return delay
@@ -149,12 +149,10 @@ class CentralScheduler(object):
         info = self._pending[task_id]
         endpoint = info['endpoint_id']
 
-        if self._last_task_sent.get(endpoint) == task_id:
-            del self._last_task_sent[endpoint]
-
         # If this is the last pending task on this endpoint, reset ETA offset
         if len(self._pending_by_endpoint[endpoint]) == 1:
             self._queue_error[endpoint] = 0.0
+            del self._last_task_ETA[endpoint]
         else:
             prediction_error = time.time() - self._pending[task_id]['ETA']
             self._queue_error[endpoint] = prediction_error
