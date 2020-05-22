@@ -4,7 +4,7 @@ from collections import defaultdict
 
 from funcx import FuncXClient
 from funcx.serialize import FuncXSerializer
-from utils import fmt_time, colored
+from utils import colored
 from strategies import init_strategy
 from predictors import init_runtime_predictor
 
@@ -73,6 +73,7 @@ class CentralScheduler(object):
 
     def choose_endpoint(self, func, payload):
         choice = self.strategy.choose_endpoint(func, payload)
+        choice['time_sent'] = time.time()
         logger.debug('Choosing endpoint {} for func {}'
                      .format(choice['endpoint'], func))
         return choice
@@ -87,7 +88,7 @@ class CentralScheduler(object):
         # .format(expected_ETA - time.time()))
 
         info = {
-            'time_sent': time.time(),
+            'time_sent': choice['time_sent'],
             'ETA': expected_ETA,
             'function_id': func,
             'endpoint_id': endpoint,
@@ -136,10 +137,13 @@ class CentralScheduler(object):
         # plus the estimated error in the ETA prediction.
         if endpoint not in self._last_task_sent or \
                 self._last_task_sent[endpoint] not in self._pending:
-            return time.time()
+            delay = time.time()
         else:
             last = self._last_task_sent[endpoint]
-            return self._pending[last]['ETA'] + self._queue_error[endpoint]
+            delay = self._pending[last]['ETA'] + self._queue_error[endpoint]
+            delay = max(delay, time.time())
+
+        return delay
 
     def _record_completed(self, task_id):
         info = self._pending[task_id]
@@ -154,6 +158,7 @@ class CentralScheduler(object):
         else:
             prediction_error = time.time() - self._pending[task_id]['ETA']
             self._queue_error[endpoint] = prediction_error
+            # print(colored(f'Prediction error {prediction_error}', 'red'))
 
         logger.info('Task exec time: expected = {:.3f}, actual = {:.3f}'
                     .format(info['ETA'] - info['time_sent'],

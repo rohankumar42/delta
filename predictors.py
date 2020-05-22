@@ -81,7 +81,7 @@ class InputLength(RuntimePredictor):
 
     def _preprocess(self, x):
         '''Create features that are easy to learn from.'''
-        return np.array([1, x, x ^ 2, 2 ** x])
+        return np.array([1, x, x ** 2, 2 ** x])
 
 
 def init_runtime_predictor(predictor, *args, **kwargs):

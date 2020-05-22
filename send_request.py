@@ -30,7 +30,7 @@ if __name__ == "__main__":
     func = client.register_function(loop, function_name='loop')
 
     # INPUTS = ['1' * 1, '1' * 4, '1' * 7]
-    INPUTS = [10, 10 ** 4, 10 ** 7]
+    INPUTS = [1, 10 ** 4, 10 ** 8]
     random.shuffle(INPUTS)
     NUM_TASKS = 100
     NUM_ENDPOINTS = 4
