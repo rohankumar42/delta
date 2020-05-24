@@ -19,13 +19,13 @@ logger.addHandler(ch)
 
 class CentralScheduler(object):
 
-    def __init__(self, fxc=None, endpoints=None, strategy='round-robin',
+    def __init__(self, endpoint_group, strategy='round-robin',
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
                  log_level='INFO', *args, **kwargs):
-        self._fxc = fxc or FuncXClient(*args, **kwargs)
+        self._fxc = FuncXClient(*args, **kwargs)
 
         # List of all FuncX endpoints we can execute on
-        self._endpoints = list(set(endpoints or []))
+        self.endpoint_group = endpoint_group
 
         # Track which endpoints a function can't run on
         self._blacklists = defaultdict(set)
@@ -48,16 +48,16 @@ class CentralScheduler(object):
 
         # Initialize runtime predictor
         self.predictor = init_runtime_predictor(runtime_predictor,
-                                                endpoints=endpoints,
+                                                endpoint_group=endpoint_group,
                                                 last_n=last_n,
                                                 train_every=train_every)
         logger.info(f"Runtime predictor using strategy {runtime_predictor}")
 
         # Initialize scheduling strategy
-        self.strategy = init_strategy(strategy, endpoints=self._endpoints,
+        self.strategy = init_strategy(strategy, endpoint_group=endpoint_group,
                                       runtime_predictor=self.predictor,
                                       queue_predictor=self.queue_delay)
-        logger.info(f"Scheduler using strategy {strategy}")
+        logger.info(f"Scheduler using strategy {self.strategy}")
 
     def blacklist(self, func, endpoint):
         # TODO: use blacklists in scheduling
@@ -152,7 +152,6 @@ class CentralScheduler(object):
         # If this is the last pending task on this endpoint, reset ETA offset
         if len(self._pending_by_endpoint[endpoint]) == 1:
             self._queue_error[endpoint] = 0.0
-            del self._last_task_ETA[endpoint]
         else:
             prediction_error = time.time() - self._pending[task_id]['ETA']
             self._queue_error[endpoint] = prediction_error

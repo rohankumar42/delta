@@ -31,14 +31,14 @@ if __name__ == "__main__":
     func = client.register_function(loop, function_name='loop')
 
     # INPUTS = ['1' * 1, '1' * 4, '1' * 7]
-    INPUTS = [10 ** 0, 10 ** 4]
+    INPUTS = [10 ** 2, 10 ** 5, 10 ** 7]
     random.shuffle(INPUTS)
-    NUM_TASKS = 0
-    NUM_ENDPOINTS = 4
+    NUM_TASKS = 10
+    NUM_GROUPS = 2
 
     start = time.time()
     warmup_batch = client.create_batch()
-    for _ in range(NUM_ENDPOINTS):
+    for _ in range(NUM_GROUPS):
         for x in INPUTS:
             task = warmup_batch.add(x, function_id=func)
     task_ids = client.batch_run(warmup_batch)
@@ -56,8 +56,8 @@ if __name__ == "__main__":
 
         # time.sleep(0.3)
 
-    for task in tasks:
-        print('Waiting on task:', task)
+    for i, task in enumerate(tasks, 1):
+        print(f'Waiting on task {i}/{NUM_TASKS}:', task)
         res = client.get_result(task, block=True)
         print('Got res:', res)
 

@@ -91,6 +91,9 @@ def batch_submit():
 
     res_str = forward_request(request, data=json.dumps(data))
     res = json.loads(res_str.text)
+    if res['status'] != 'Success':
+        funcx_app.logger.error(f'Error: {res}')
+        return res
 
     for i in range(n):
         SCHEDULER.log_submission(data['functions'][i], data['payloads'][i],
@@ -114,10 +117,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     with open(args.endpoints) as fh:
-        endpoints = yaml.safe_load(fh)
+        endpoint_group = yaml.safe_load(fh)
 
     global SCHEDULER
-    SCHEDULER = CentralScheduler(endpoints=endpoints,
+    SCHEDULER = CentralScheduler(endpoint_group=endpoint_group,
                                  strategy=args.strategy,
                                  runtime_predictor=args.predictor,
                                  last_n=args.last_n,
