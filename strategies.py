@@ -8,20 +8,21 @@ FUNCX_LATENCY = 0.5  # Estimated overhead of executing task
 
 class Strategy(object):
 
-    def __init__(self, endpoint_group):
-        if len(endpoint_group) == 0:
-            raise ValueError("List of endpoint_group cannot be empty")
-        self.endpoint_group = endpoint_group
+    def __init__(self, endpoints):
+        if len(endpoints) == 0:
+            raise ValueError("List of endpoints cannot be empty")
+        self.endpoints = endpoints
 
     def choose_endpoint(self, func, payload):
         raise NotImplementedError
 
     def add_endpoint(self, endpoint, group):
-        self.endpoint_group[endpoint] = group
+        # TODO: explore new endpoints
+        self.endpoints[endpoint] = group
 
     def remove_endpoint(self, endpoint):
-        if endpoint in self.endpoint_group:
-            del self.endpoint_group[endpoint]
+        if endpoint in self.endpoints:
+            del self.endpoints[endpoint]
 
     def __str__(self):
         return type(self).__name__
@@ -29,12 +30,12 @@ class Strategy(object):
 
 class RoundRobin(Strategy):
 
-    def __init__(self, endpoint_group, *args, **kwargs):
-        super().__init__(endpoint_group=endpoint_group)
+    def __init__(self, endpoints, *args, **kwargs):
+        super().__init__(endpoints=endpoints)
         self.next = 0
 
     def choose_endpoint(self, func, payload):
-        endpoints = list(self.endpoint_group.keys())
+        endpoints = list(self.endpoints.keys())
         endpoint = endpoints[self.next % len(endpoints)]
         self.next += 1
         return {'endpoint': endpoint}
@@ -42,16 +43,16 @@ class RoundRobin(Strategy):
 
 class FastestEndpoint(Strategy):
 
-    def __init__(self, endpoint_group, runtime_predictor: RuntimePredictor,
+    def __init__(self, endpoints, runtime_predictor: RuntimePredictor,
                  *args, **kwargs):
-        super().__init__(endpoint_group=endpoint_group)
+        super().__init__(endpoints=endpoints)
         assert(callable(runtime_predictor))
         self.runtime = runtime_predictor
         self.next_group = defaultdict(int)
         self.next_endpoint = defaultdict(lambda: defaultdict(int))
-        self.groups = list(set(endpoint_group.values()))
+        self.groups = list(set(x['group'] for x in endpoints.values()))
         self.group_to_endpoints = {
-            group: [e for (e, g) in endpoint_group.items() if g == group]
+            group: [e for (e, x) in endpoints.items() if x['group'] == group]
             for group in self.groups
         }
 
@@ -82,18 +83,18 @@ class FastestEndpoint(Strategy):
 
 class SmallestETA(Strategy):
 
-    def __init__(self, endpoint_group, runtime_predictor: RuntimePredictor,
+    def __init__(self, endpoints, runtime_predictor: RuntimePredictor,
                  queue_predictor, *args, **kwargs):
-        super().__init__(endpoint_group)
+        super().__init__(endpoints)
         assert(callable(runtime_predictor))
         assert(callable(queue_predictor))
         self.runtime = runtime_predictor
         self.queue_predictor = queue_predictor
         self.next_group = defaultdict(int)
         self.next_endpoint = defaultdict(lambda: defaultdict(int))
-        self.groups = list(set(endpoint_group.values()))
+        self.groups = list(set(x['group'] for x in endpoints.values()))
         self.group_to_endpoints = {
-            group: [e for (e, g) in endpoint_group.items() if g == group]
+            group: [e for (e, x) in endpoints.items() if x['group'] == group]
             for group in self.groups
         }
 
@@ -120,7 +121,7 @@ class SmallestETA(Strategy):
 
         else:
             ETAs = [(ep, self.predict_ETA(func, ep, payload))
-                    for ep in self.endpoint_group.keys()]
+                    for ep in self.endpoints.keys()]
             res['endpoint'], res['ETA'] = min(ETAs, key=lambda x: x[1])
 
         return res
@@ -130,9 +131,8 @@ class SmallestETA(Strategy):
         # latency, start-up, and other costs
 
         t_pending = self.queue_predictor(endpoint)
-        t_run = self.runtime(func=func, group=self.endpoint_group[endpoint],
+        t_run = self.runtime(func=func, group=self.endpoints[endpoint]['group'],
                              payload=payload)
-        print(endpoint, t_run)
 
         return t_pending + t_run + FUNCX_LATENCY
 

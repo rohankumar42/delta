@@ -7,8 +7,8 @@ from utils import avg
 
 class RuntimePredictor(object):
 
-    def __init__(self, endpoint_group):
-        self.endpoint_group = endpoint_group
+    def __init__(self, endpoints):
+        self.endpoints = endpoints
 
     def predict(self, func, group, payload):
         raise NotImplementedError
@@ -22,8 +22,8 @@ class RuntimePredictor(object):
 
 class RollingAverage(RuntimePredictor):
 
-    def __init__(self, endpoint_group, last_n=3, *args, **kwargs):
-        super().__init__(endpoint_group)
+    def __init__(self, endpoints, last_n=3, *args, **kwargs):
+        super().__init__(endpoints)
         self.last_n = last_n
         self.runtimes = defaultdict(lambda: defaultdict(Queue))
         self.avg_runtime = defaultdict(lambda: defaultdict(float))
@@ -35,7 +35,7 @@ class RollingAverage(RuntimePredictor):
     def update(self, task_info, new_runtime):
         func = task_info['function_id']
         end = task_info['endpoint_id']
-        group = self.endpoint_group[end]
+        group = self.endpoints[end]['group']
 
         while len(self.runtimes[func][group].queue) > self.last_n:
             self.runtimes[func][group].get()
@@ -47,10 +47,10 @@ class RollingAverage(RuntimePredictor):
 
 class InputLength(RuntimePredictor):
 
-    def __init__(self, endpoint_group, train_every=1, *args, **kwargs):
+    def __init__(self, endpoints, train_every=1, *args, **kwargs):
         # TODO: ensure that the number of data points stored stays under some
         # threshold, to guarantee low memory usage and fast training
-        super().__init__(endpoint_group)
+        super().__init__(endpoints)
         self.lengths = defaultdict(lambda: defaultdict(list))
         self.runtimes = defaultdict(lambda: defaultdict(list))
         self.weights = defaultdict(lambda: defaultdict(lambda: np.zeros(4)))
@@ -65,7 +65,7 @@ class InputLength(RuntimePredictor):
     def update(self, task_info, new_runtime):
         func = task_info['function_id']
         end = task_info['endpoint_id']
-        group = self.endpoint_group[end]
+        group = self.endpoints[end]['group']
 
         self.lengths[func][group].append(len(task_info['payload']))
         self.runtimes[func][group].append(new_runtime)

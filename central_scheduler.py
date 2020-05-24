@@ -10,7 +10,6 @@ from predictors import init_runtime_predictor
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
 ch.setFormatter(logging.Formatter(
     colored("[SCHEDULER] %(message)s", 'yellow')))
@@ -19,13 +18,13 @@ logger.addHandler(ch)
 
 class CentralScheduler(object):
 
-    def __init__(self, endpoint_group, strategy='round-robin',
+    def __init__(self, endpoints, strategy='round-robin',
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
                  log_level='INFO', *args, **kwargs):
         self._fxc = FuncXClient(*args, **kwargs)
 
         # List of all FuncX endpoints we can execute on
-        self.endpoint_group = endpoint_group
+        self._endpoints = endpoints
 
         # Track which endpoints a function can't run on
         self._blacklists = defaultdict(set)
@@ -48,13 +47,13 @@ class CentralScheduler(object):
 
         # Initialize runtime predictor
         self.predictor = init_runtime_predictor(runtime_predictor,
-                                                endpoint_group=endpoint_group,
+                                                endpoints=endpoints,
                                                 last_n=last_n,
                                                 train_every=train_every)
         logger.info(f"Runtime predictor using strategy {runtime_predictor}")
 
         # Initialize scheduling strategy
-        self.strategy = init_strategy(strategy, endpoint_group=endpoint_group,
+        self.strategy = init_strategy(strategy, endpoints=endpoints,
                                       runtime_predictor=self.predictor,
                                       queue_predictor=self.queue_delay)
         logger.info(f"Scheduler using strategy {self.strategy}")
@@ -74,7 +73,7 @@ class CentralScheduler(object):
     def choose_endpoint(self, func, payload):
         choice = self.strategy.choose_endpoint(func, payload)
         logger.debug('Choosing endpoint {} for func {}'
-                     .format(choice['endpoint'], func))
+                     .format(self.endpoint_name(choice['endpoint']), func))
         choice['time_sent'] = time.time()
         choice['ETA'] = choice.get('ETA', time.time())
 
@@ -86,7 +85,7 @@ class CentralScheduler(object):
         endpoint = choice['endpoint']
 
         logger.info('Sending func {} to endpoint {} with task id {}'
-                    .format(func, endpoint, task_id))
+                    .format(func, self.endpoint_name(endpoint), task_id))
         # logger.info('Task ETA is {:.2f} s from now'
         # .format(expected_ETA - time.time()))
 
@@ -110,9 +109,9 @@ class CentralScheduler(object):
         if 'result' in data:
             result = self.fx_serializer.deserialize(data['result'])
             runtime = result['runtime']
+            name = self.endpoint_name(self._pending[task_id]['endpoint_id'])
             logger.info('Got result from {} for task {} with time {}'
-                        .format(self._pending[task_id]['endpoint_id'],
-                                task_id, runtime))
+                        .format(name, task_id, runtime))
 
             self.predictor.update(self._pending[task_id], runtime)
             self._record_completed(task_id)
@@ -164,3 +163,7 @@ class CentralScheduler(object):
 
         del self._pending[task_id]
         self._pending_by_endpoint[endpoint].remove(task_id)
+
+    def endpoint_name(self, endpoint):
+        name = self._endpoints[endpoint]['name']
+        return f'{name:20}'

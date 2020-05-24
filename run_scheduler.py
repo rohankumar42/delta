@@ -117,10 +117,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     with open(args.endpoints) as fh:
-        endpoint_group = yaml.safe_load(fh)
+        endpoints = yaml.safe_load(fh)
 
     global SCHEDULER
-    SCHEDULER = CentralScheduler(endpoint_group=endpoint_group,
+    SCHEDULER = CentralScheduler(endpoints=endpoints,
                                  strategy=args.strategy,
                                  runtime_predictor=args.predictor,
                                  last_n=args.last_n,
