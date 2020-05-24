@@ -22,19 +22,40 @@ def loop_length(s):
     return i+1
 
 
+def parallel_count(n):
+    import multiprocessing as mp
+    num_cpus = mp.cpu_count()
+
+    def loop_worker(k):
+        for i in range(k):
+            pass
+        return k
+
+    processes = [
+        mp.Process(target=loop_worker, args=(n // num_cpus,))
+        for _ in range(num_cpus)
+    ]
+    for p in processes:
+        p.start()
+    for p in processes:
+        p.join()
+
+    return n
+
+
 if __name__ == "__main__":
     client = FuncXSmartClient(funcx_service_address='http://localhost:5000',
                               force_login=False, log_level='INFO',
                               batch_status=True)
     random.seed(100)
 
-    func = client.register_function(loop, function_name='loop')
+    func = client.register_function(parallel_count)
 
     # INPUTS = ['1' * 1, '1' * 4, '1' * 7]
-    INPUTS = [10 ** 2, 10 ** 5, 10 ** 7]
+    INPUTS = [10 ** 5]
     random.shuffle(INPUTS)
     NUM_TASKS = 10
-    NUM_GROUPS = 2
+    NUM_GROUPS = 3
 
     start = time.time()
     warmup_batch = client.create_batch()
@@ -43,7 +64,7 @@ if __name__ == "__main__":
             task = warmup_batch.add(x, function_id=func)
     task_ids = client.batch_run(warmup_batch)
     for task_id in task_ids:
-        client.get_result(task_id, block=True)
+        res = client.get_result(task_id, block=True)
     print('Warmed up in {:.3f} s'.format(time.time() - start))
 
     tasks = []
