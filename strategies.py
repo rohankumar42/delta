@@ -84,12 +84,13 @@ class FastestEndpoint(Strategy):
 class SmallestETA(Strategy):
 
     def __init__(self, endpoints, runtime_predictor: RuntimePredictor,
-                 queue_predictor, *args, **kwargs):
+                 queue_predictor, launch_predictor, *args, **kwargs):
         super().__init__(endpoints)
         assert(callable(runtime_predictor))
         assert(callable(queue_predictor))
         self.runtime = runtime_predictor
         self.queue_predictor = queue_predictor
+        self.launch_predictor = launch_predictor
         self.next_group = defaultdict(int)
         self.next_endpoint = defaultdict(lambda: defaultdict(int))
         self.groups = list(set(x['group'] for x in endpoints.values()))
@@ -130,11 +131,13 @@ class SmallestETA(Strategy):
         # TODO: better task ETA prediction by including data movement,
         # latency, start-up, and other costs
 
+        t_launch = self.launch_predictor(endpoint)
         t_pending = self.queue_predictor(endpoint)
-        t_run = self.runtime(func=func, group=self.endpoints[endpoint]['group'],
+        t_run = self.runtime(func=func,
+                             group=self.endpoints[endpoint]['group'],
                              payload=payload)
 
-        return t_pending + t_run + FUNCX_LATENCY
+        return t_launch + t_pending + t_run + FUNCX_LATENCY
 
 
 def init_strategy(strategy, *args, **kwargs):

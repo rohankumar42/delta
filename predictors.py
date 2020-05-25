@@ -19,6 +19,9 @@ class RuntimePredictor(object):
     def __call__(self, *args, **kwargs):
         return self.predict(*args, **kwargs)
 
+    def __str__(self):
+        return type(self).__name__
+
 
 class RollingAverage(RuntimePredictor):
 
@@ -89,9 +92,9 @@ class InputLength(RuntimePredictor):
 
 def init_runtime_predictor(predictor, *args, **kwargs):
     predictor = predictor.strip().lower()
-    if predictor == 'rolling-average':
+    if predictor.endswith('average') or predictor.endswith('avg'):
         return RollingAverage(*args, **kwargs)
-    elif predictor == 'input-length':
+    elif predictor.endswith('length') or predictor.endswith('size'):
         return InputLength(*args, **kwargs)
     else:
         raise NotImplementedError(f"Predictor: {predictor}")
