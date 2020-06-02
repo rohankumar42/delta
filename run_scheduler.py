@@ -60,34 +60,17 @@ def reg_function():
 
 
 @funcx_app.route('/submit', methods=['POST'])
-def submit():
-    data = json.loads(request.data)
-    assert (data['endpoint'] == 'UNDECIDED')
-    choice = SCHEDULER.choose_endpoint(data['func'], data['payload'])
-    data['endpoint'] = choice['endpoint']
-
-    res_str = forward_request(request, data=json.dumps(data))
-    res = json.loads(res_str.text)
-    SCHEDULER.log_submission(data['func'], data['payload'],
-                             choice, res['task_uuid'])
-    res['endpoint'] = data['endpoint']
-    return json.dumps(res)
-
-
-@funcx_app.route('/batch_run', methods=['POST'])
 def batch_submit():
     data = json.loads(request.data)
-    assert(all(e == 'UNDECIDED' for e in data['endpoints']))
-    n = len(data['functions'])
-    data['endpoints'] = []
+    assert(all(t[1] == 'UNDECIDED' for t in data['tasks']))
     choices = []
 
     # TODO: smarter scheduling for batch submissions
-    for i in range(n):
-        choice = SCHEDULER.choose_endpoint(data['functions'][i],
-                                           data['payloads'][i])
+    for i, task in enumerate(data['tasks']):
+        # Tasks are (func, endpoint, payload) tuples
+        choice = SCHEDULER.choose_endpoint(task[0], task[2])
         choices.append(choice)
-        data['endpoints'].append(choice['endpoint'])
+        data['tasks'][i] = (task[0], choice['endpoint'], task[2])
 
     res_str = forward_request(request, data=json.dumps(data))
     res = json.loads(res_str.text)
@@ -95,11 +78,11 @@ def batch_submit():
         funcx_app.logger.error(f'Error: {res}')
         return res
 
-    for i in range(n):
-        SCHEDULER.log_submission(data['functions'][i], data['payloads'][i],
-                                 choices[i], res['task_uuids'][i])
+    for task, task_uuid, choice in \
+            zip(data['tasks'], res['task_uuids'], choices):
+        SCHEDULER.log_submission(task[0], task[1], choice, task_uuid)
 
-    res['endpoints'] = data['endpoints']
+    res['endpoints'] = [task[1] for task in data['tasks']]
     return json.dumps(res)
 
 

@@ -43,21 +43,34 @@ def parallel_count(n):
     return n
 
 
+def get_env(*args):
+    return {'globals': str(globals()), 'locals': str(locals())}
+
+
+def read_file(name):
+    import os
+    path = os.path.join(os.path.expanduser('~/.globus_funcx/'), name)
+    with open(path) as fh:
+        return fh.read()
+
+
 if __name__ == "__main__":
     client = FuncXSmartClient(funcx_service_address='http://localhost:5000',
                               force_login=False, log_level='INFO',
                               batch_status=True)
     random.seed(100)
 
-    func = client.register_function(parallel_count)
+    func = client.register_function(read_file)
 
     # INPUTS = ['1' * 1, '1' * 4, '1' * 7]
-    INPUTS = [10 ** 5]
+    INPUTS = ['test.txt', 'does_not_exist.jpg']
     random.shuffle(INPUTS)
-    NUM_TASKS = 10
-    NUM_GROUPS = 3
+    NUM_TASKS = 0
+    NUM_GROUPS = 1
 
     start = time.time()
+    task_ids = []
+    csil4 = 'eb29b896-a389-11ea-8f07-0a21f750d19b'
     warmup_batch = client.create_batch()
     for _ in range(NUM_GROUPS):
         for x in INPUTS:

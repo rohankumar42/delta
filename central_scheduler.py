@@ -237,7 +237,7 @@ class CentralScheduler(object):
                     elif self.temperature[end] != 'WARM' \
                             and status['active_managers'] > 0:
                         self.temperature[end] = 'WARM'
-                        logger.info('Endpoint {} is warm agin!'
+                        logger.info('Endpoint {} is warm again!'
                                     .format(self.endpoint_name(end)))
 
             # Sleep before checking statuses again
