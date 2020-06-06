@@ -11,7 +11,7 @@ except ImportError:
     def colored(x, *args, **kwargs):
         return x
 
-from central_scheduler import CentralScheduler
+from central_scheduler import CentralScheduler, FUNCX_API
 
 funcx_app = Flask(__name__)
 ch = logging.StreamHandler()
@@ -19,9 +19,6 @@ ch.setFormatter(logging.Formatter(colored("%(message)s", 'yellow')))
 funcx_app.logger.addHandler(ch)
 funcx_app.logger.setLevel('DEBUG')
 logging.getLogger('werkzeug').setLevel('ERROR')
-
-
-FUNCX_API = 'https://dev.funcx.org/api/v1'
 
 
 def forward_request(request, route=None, headers=None, data=None):
@@ -40,17 +37,35 @@ def base():
 
 @funcx_app.route('/<task_id>/status', methods=['GET'])
 def status(task_id):
-    res = forward_request(request)
-    SCHEDULER.log_status(task_id, json.loads(res.text))
-    return res.text
+    real_task_ids = SCHEDULER.translate_task_id(task_id)
+    for real_task_id in real_task_ids:
+        res = forward_request(request, route=f'/{real_task_id}/status')
+        SCHEDULER.log_status(real_task_id, json.loads(res.text))
+
+    return SCHEDULER.get_status(task_id)
 
 
 @funcx_app.route('/batch_status', methods=['POST'])
 def batch_status():
-    res = forward_request(request)
-    for task_id, status in json.loads(res.text)['results'].items():
-        SCHEDULER.log_status(task_id, status)
-    return res.text
+    task_ids = json.loads(request.data)['task_ids']
+    real_task_ids = set()
+    for task_id in task_ids:
+        real_task_ids |= SCHEDULER.translate_task_id(task_id)
+
+    if len(real_task_ids) > 0:
+        real_data = json.dumps({'task_ids': list(real_task_ids)})
+        res = forward_request(request, data=real_data)
+        for real_task_id, status in json.loads(res.text)['results'].items():
+            SCHEDULER.log_status(real_task_id, status)
+
+    res_data = {'response': 'batch', 'results': {}}
+    for task_id in task_ids:
+        status = SCHEDULER.get_status(task_id)
+        if status.get('status') == 'PENDING':
+            continue
+        res_data['results'][task_id] = status
+
+    return json.dumps(res_data)
 
 
 @funcx_app.route('/register_function', methods=['POST'])
@@ -61,29 +76,25 @@ def reg_function():
 
 @funcx_app.route('/submit', methods=['POST'])
 def batch_submit():
+    # Note: This route is not forwarded to the main FuncX service here.
+    # The tasks will be sent to the FuncX service by the SCHEDULER object.
+    # This is to allow for delayed-task and backup-task submission.
+    headers = request.headers
     data = json.loads(request.data)
-    assert(all(t[1] == 'UNDECIDED' for t in data['tasks']))
-    choices = []
 
-    # TODO: smarter scheduling for batch submissions
-    for i, task in enumerate(data['tasks']):
-        # Tasks are (func, endpoint, payload) tuples
-        choice = SCHEDULER.choose_endpoint(task[0], task[2])
-        choices.append(choice)
-        data['tasks'][i] = (task[0], choice['endpoint'], task[2])
+    if not all(t[1] == 'UNDECIDED' for t in data['tasks']):
+        return json.dumps({
+            'status': 'Failed',
+            'reason': 'Endpoints should be \'UNDECIDED\''
+        })
 
-    res_str = forward_request(request, data=json.dumps(data))
-    res = json.loads(res_str.text)
-    if res['status'] != 'Success':
-        funcx_app.logger.error(f'Error: {res}')
-        return res
-
-    for task, task_uuid, choice in \
-            zip(data['tasks'], res['task_uuids'], choices):
-        SCHEDULER.log_submission(task[0], task[1], choice, task_uuid)
-
-    res['endpoints'] = [task[1] for task in data['tasks']]
-    return json.dumps(res)
+    tasks = [(func, payload) for (func, _, payload) in data['tasks']]
+    task_uuids, endpoints = SCHEDULER.batch_submit(tasks, headers)
+    return json.dumps({
+        'status': 'Success',
+        'task_uuids': task_uuids,
+        'endpoints': endpoints
+    })
 
 
 if __name__ == "__main__":
