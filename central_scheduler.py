@@ -9,7 +9,8 @@ from collections import defaultdict
 
 from funcx import FuncXClient
 from funcx.serialize import FuncXSerializer
-from utils import colored
+from utils import colored, endpoint_name
+from transfer import TransferManager
 from strategies import init_strategy
 from predictors import init_runtime_predictor
 
@@ -23,6 +24,7 @@ logger.addHandler(ch)
 
 FUNCX_API = 'https://dev.funcx.org/api/v1'
 HEARTBEAT_THRESHOLD = 75.0  # Endpoints send regular heartbeats
+CLIENT_ID = 'f06739da-ad7d-40bd-887f-abb1d23bbd6f'
 
 
 class CentralScheduler(object):
@@ -31,6 +33,10 @@ class CentralScheduler(object):
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
                  log_level='INFO', *args, **kwargs):
         self._fxc = FuncXClient(*args, **kwargs)
+
+        # Initialize a transfer client
+        self._transfer_manger = TransferManager(endpoints=endpoints,
+                                                log_level=log_level)
 
         # Info about FuncX endpoints we can execute on
         self._endpoints = endpoints
@@ -108,18 +114,27 @@ class CentralScheduler(object):
             choice = self.strategy.choose_endpoint(func, payload)
             endpoint = choice['endpoint']
             logger.debug('Choosing endpoint {} for func {}'
-                         .format(self.endpoint_name(endpoint), func))
+                         .format(endpoint_name(endpoint), func))
             choice['ETA'] = choice.get('ETA', time.time())
+
+            # Create (fake) task id to return to client
+            task_id = str(uuid.uuid4())
+
+            # Start Globus transfer of required files
+            _, ser_kwargs = self.fx_serializer.unpack_buffers(payload)
+            kwargs = self.fx_serializer.deserialize(ser_kwargs)
+            files = kwargs['_globus_files']
+            transfer_ids = self._transfer_manger.transfer(files, endpoint,
+                                                          task_id)
 
             # If a cold endpoint is being started, mark it as no longer cold,
             # so that subsequent launch-time predictions are correct (i.e., 0)
             if self.temperature[endpoint] == 'COLD':
                 self.temperature[endpoint] = 'WARMING'
                 logger.info('A cold endpoint {} was chosen; marked as warming.'
-                            .format(self.endpoint_name(endpoint)))
+                            .format(endpoint_name(endpoint)))
 
             # Store task information
-            task_id = str(uuid.uuid4())
             self._task_id_translation[task_id] = set()
             info = {
                 'task_id': task_id,
@@ -127,10 +142,11 @@ class CentralScheduler(object):
                 'function_id': func,
                 'endpoint_id': endpoint,
                 'payload': payload,
-                'headers': headers
+                'headers': headers,
+                'transfer_ids': transfer_ids
             }
 
-            # Schedule task for sending
+            # Schedule task for sending to FuncX
             self._scheduled_tasks.put((task_id, info))
 
             task_ids.append(task_id)
@@ -156,7 +172,7 @@ class CentralScheduler(object):
             result = self.fx_serializer.deserialize(data['result'])
             runtime = result['runtime']
             endpoint = self._pending[real_task_id]['endpoint_id']
-            name = self.endpoint_name(endpoint)
+            name = endpoint_name(endpoint)
             logger.info('Got result from {} for task {} with time {}'
                         .format(name, real_task_id, runtime))
 
@@ -225,10 +241,6 @@ class CentralScheduler(object):
         del self._pending[real_task_id]
         self._pending_by_endpoint[endpoint].remove(real_task_id)
 
-    def endpoint_name(self, endpoint):
-        name = self._endpoints[endpoint]['name']
-        return f'{name:16}'
-
     def launch_time(self, endpoint):
         # If endpoint is warm, there is no launch time
         if self.temperature[endpoint] != 'COLD':
@@ -238,40 +250,52 @@ class CentralScheduler(object):
             return self._endpoints[endpoint]['launch_time']
         else:
             logger.warn('Endpoint {} should always be warm, but is cold'
-                        .format(self.endpoint_name(endpoint)))
+                        .format(endpoint_name(endpoint)))
             return 0.0
 
     def _monitor_tasks(self):
         logger.info('Starting task-watchdog thread')
 
+        scheduled = {}
+
         while True:
 
             time.sleep(self._task_watchdog_sleep)
 
-            task_infos = {}
+            # Get newly scheduled tasks
             while True:
                 try:
                     task_id, info = self._scheduled_tasks.get_nowait()
-                    task_infos[task_id] = info
+                    scheduled[task_id] = info
                 except Empty:
                     break
 
-            if len(task_infos) == 0:
-                logger.debug('No scheduled tasks. Task watchdog sleeping...')
+            # Filter out all tasks whose data transfer has not been completed
+            ready_to_send = set()
+            for task_id, info in scheduled.items():
+                if self._transfer_manger.is_complete(info['transfer_ids']):
+                    ready_to_send.add(task_id)
+                else:  # This task cannot be scheduled yet
+                    continue
+
+            if len(ready_to_send) == 0:
+                logger.debug('No new tasks to send. Task watchdog sleeping...')
                 continue
 
             # TODO: different clients send different headers. change eventually
-            headers = list(task_infos.values())[0]['headers']
+            headers = list(scheduled.values())[0]['headers']
 
             logger.info('Scheduling a batch of {} tasks'
-                        .format(len(task_infos)))
+                        .format(len(ready_to_send)))
 
-            # Submit scheduled tasks to FuncX
+            # Submit all ready tasks to FuncX
             data = {'tasks': []}
-            for task_id, info in task_infos.items():
+            for task_id in ready_to_send:
+                info = scheduled[task_id]
                 submit_info = (info['function_id'], info['endpoint_id'],
                                info['payload'])
                 data['tasks'].append(submit_info)
+                logger.info(f'Sending task {task_id}')
 
             res_str = requests.post(f'{FUNCX_API}/submit', headers=headers,
                                     data=json.dumps(data))
@@ -282,9 +306,8 @@ class CentralScheduler(object):
                 continue
 
             # Update task info with submission info
-            for task_id, real_task_id in zip(task_infos.keys(),
-                                             res['task_uuids']):
-                info = task_infos[task_id]
+            for task_id, real_task_id in zip(ready_to_send, res['task_uuids']):
+                info = scheduled[task_id]
                 info['ETA'] = self.strategy.predict_ETA(info['function_id'],
                                                         info['endpoint_id'],
                                                         info['payload'])
@@ -302,16 +325,19 @@ class CentralScheduler(object):
                 logger.debug('Sent task id {} with real task id {}'
                              .format(task_id, real_task_id))
 
+            # Stop tracking all newly sent tasks
+            for task_id in ready_to_send:
+                del scheduled[task_id]
+
     def _check_endpoints(self):
         logger.info('Starting endpoint-watchdog thread')
-        fxc = FuncXClient()
 
         while True:
             for end in self._endpoints.keys():
-                statuses = fxc.get_endpoint_status(end)
+                statuses = self._fxc.get_endpoint_status(end)
                 if len(statuses) == 0:
                     logger.warn('Endpoint {} does not have any statuses'
-                                .format(self.endpoint_name(end)))
+                                .format(endpoint_name(end)))
                 else:
                     status = statuses[0]  # Most recent endpoint status
 
@@ -321,12 +347,12 @@ class CentralScheduler(object):
                         self.is_dead[end] = True
                         logger.warn('Endpoint {} seems to have died! '
                                     'Last heartbeat was {:.2f} seconds ago.'
-                                    .format(self.endpoint_name(end), age))
+                                    .format(endpoint_name(end), age))
                     elif self.is_dead[end] and age <= HEARTBEAT_THRESHOLD:
                         self.is_dead[end] = False
                         logger.warn('Endpoint {} is back alive! '
                                     'Last heartbeat was {:.2f} seconds ago.'
-                                    .format(self.endpoint_name(end), age))
+                                    .format(endpoint_name(end), age))
 
                     # Mark endpoint as "cold" or "warm" depending on if it
                     # has active managers (nodes) allocated to it
@@ -334,12 +360,12 @@ class CentralScheduler(object):
                             and status['active_managers'] == 0:
                         self.temperature[end] = 'COLD'
                         logger.info('Endpoint {} is cold!'
-                                    .format(self.endpoint_name(end)))
+                                    .format(endpoint_name(end)))
                     elif self.temperature[end] != 'WARM' \
                             and status['active_managers'] > 0:
                         self.temperature[end] = 'WARM'
                         logger.info('Endpoint {} is warm again!'
-                                    .format(self.endpoint_name(end)))
+                                    .format(endpoint_name(end)))
 
             # Sleep before checking statuses again
             time.sleep(15)

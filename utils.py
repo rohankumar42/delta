@@ -1,3 +1,4 @@
+import yaml
 import time
 from datetime import datetime
 from queue import Queue
@@ -7,6 +8,9 @@ try:
 except ImportError:
     def colored(x, *args, **kwargs):
         return x
+
+with open('endpoints.yaml') as fh:
+    ENDPOINTS = yaml.safe_load(fh)
 
 
 def avg(x):
@@ -18,3 +22,8 @@ def avg(x):
 
 def fmt_time(t=None, fmt='%H:%M:%S'):
     return datetime.fromtimestamp(t or time.time()).strftime(fmt)
+
+
+def endpoint_name(endpoint):
+    name = ENDPOINTS[endpoint]['name']
+    return f'{name:16}'
