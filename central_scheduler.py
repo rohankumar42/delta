@@ -41,6 +41,7 @@ class CentralScheduler(object):
         # Info about FuncX endpoints we can execute on
         self._endpoints = endpoints
         self.is_dead = defaultdict(bool)
+        self.last_result_time = defaultdict(float)
         self.temperature = defaultdict(lambda: 'WARM')
 
         # Track which endpoints a function can't run on
@@ -163,6 +164,7 @@ class CentralScheduler(object):
             return
 
         task_id = self._pending[real_task_id]['task_id']
+        endpoint = self._pending[real_task_id]['endpoint_id']
         # Don't overwrite latest status if it is a result/exception
         if task_id not in self._latest_status or \
                 self._latest_status[task_id].get('status') == 'PENDING':
@@ -171,13 +173,13 @@ class CentralScheduler(object):
         if 'result' in data:
             result = self.fx_serializer.deserialize(data['result'])
             runtime = result['runtime']
-            endpoint = self._pending[real_task_id]['endpoint_id']
             name = endpoint_name(endpoint)
             logger.info('Got result from {} for task {} with time {}'
                         .format(name, real_task_id, runtime))
 
             self.predictor.update(self._pending[real_task_id], runtime)
             self._record_completed(real_task_id)
+            self.last_result_time[endpoint] = time.time()
 
         elif 'exception' in data:
             exception = self.fx_serializer.deserialize(data['exception'])
@@ -188,6 +190,7 @@ class CentralScheduler(object):
                              .format(real_task_id, e))
 
             self._record_completed(real_task_id)
+            self.last_result_time[endpoint] = time.time()
 
         elif 'status' in data and data['status'] == 'PENDING':
             pass
@@ -295,7 +298,6 @@ class CentralScheduler(object):
                 submit_info = (info['function_id'], info['endpoint_id'],
                                info['payload'])
                 data['tasks'].append(submit_info)
-                logger.info(f'Sending task {task_id}')
 
             res_str = requests.post(f'{FUNCX_API}/submit', headers=headers,
                                     data=json.dumps(data))
@@ -322,8 +324,9 @@ class CentralScheduler(object):
                 # Record endpoint ETA for queue-delay prediction
                 self._last_task_ETA[endpoint] = info['ETA']
 
-                logger.debug('Sent task id {} with real task id {}'
-                             .format(task_id, real_task_id))
+                logger.info('Sent task id {} to {} with real task id {}'
+                            .format(task_id, endpoint_name(endpoint),
+                                    real_task_id))
 
             # Stop tracking all newly sent tasks
             for task_id in ready_to_send:
@@ -342,7 +345,10 @@ class CentralScheduler(object):
                     status = statuses[0]  # Most recent endpoint status
 
                     # Mark endpoint as dead/alive based on heartbeat's age
-                    age = time.time() - status['timestamp']
+                    # Heartbeats are delayed when an endpoint is executing
+                    # tasks, so take into account last execution too
+                    age = time.time() - max(status['timestamp'],
+                                            self.last_result_time[end])
                     if not self.is_dead[end] and age > HEARTBEAT_THRESHOLD:
                         self.is_dead[end] = True
                         logger.warn('Endpoint {} seems to have died! '
