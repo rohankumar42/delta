@@ -40,7 +40,7 @@ class CentralScheduler(object):
 
         # Info about FuncX endpoints we can execute on
         self._endpoints = endpoints
-        self.is_dead = defaultdict(bool)
+        self._dead_endpoints = set()
         self.last_result_time = defaultdict(float)
         self.temperature = defaultdict(lambda: 'WARM')
 
@@ -121,8 +121,9 @@ class CentralScheduler(object):
 
         for func, payload in tasks:
             # TODO: do not choose a dead or blocked endpoint
+            exclude = self._blocked[func] | self._dead_endpoints
             choice = self.strategy.choose_endpoint(func, payload,
-                                                   exclude=self._blocked[func])
+                                                   exclude=exclude)
             endpoint = choice['endpoint']
             logger.debug('Choosing endpoint {} for func {}'
                          .format(endpoint_name(endpoint), func))
@@ -359,13 +360,14 @@ class CentralScheduler(object):
                     # tasks, so take into account last execution too
                     age = time.time() - max(status['timestamp'],
                                             self.last_result_time[end])
-                    if not self.is_dead[end] and age > HEARTBEAT_THRESHOLD:
-                        self.is_dead[end] = True
+                    is_dead = end in self._dead_endpoints
+                    if not is_dead and age > HEARTBEAT_THRESHOLD:
+                        self._dead_endpoints.add(end)
                         logger.warn('Endpoint {} seems to have died! '
                                     'Last heartbeat was {:.2f} seconds ago.'
                                     .format(endpoint_name(end), age))
-                    elif self.is_dead[end] and age <= HEARTBEAT_THRESHOLD:
-                        self.is_dead[end] = False
+                    elif is_dead and age <= HEARTBEAT_THRESHOLD:
+                        self._dead_endpoints.remove(end)
                         logger.warn('Endpoint {} is back alive! '
                                     'Last heartbeat was {:.2f} seconds ago.'
                                     .format(endpoint_name(end), age))
