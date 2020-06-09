@@ -97,6 +97,11 @@ def batch_submit():
     })
 
 
+@funcx_app.route('/block/<func>/<endpoint>', methods=['GET'])
+def block(func, endpoint):
+    return SCHEDULER.block(func, endpoint)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--port', type=int, default=5000)

@@ -21,7 +21,7 @@ class Strategy(object):
         self.queue_predictor = queue_predictor
         self.launch_predictor = launch_predictor
 
-    def choose_endpoint(self, func, payload):
+    def choose_endpoint(self, func, payload, exclude=None):
         raise NotImplementedError
 
     def add_endpoint(self, endpoint, group):
@@ -54,10 +54,15 @@ class RoundRobin(Strategy):
         super().__init__(*args, **kwargs)
         self.next = 0
 
-    def choose_endpoint(self, func, payload):
+    def choose_endpoint(self, func, payload, exclude=None):
+        exclude = exclude or set()
+        assert(len(exclude) < len(self.endpoints))
         endpoints = list(self.endpoints.keys())
-        endpoint = endpoints[self.next % len(endpoints)]
-        self.next += 1
+        while True:
+            endpoint = endpoints[self.next % len(endpoints)]
+            self.next += 1
+            if endpoint not in exclude:
+                break
         return {'endpoint': endpoint}
 
 
@@ -67,35 +72,43 @@ class FastestEndpoint(Strategy):
         super().__init__(*args, **kwargs)
         self.next_group = defaultdict(int)
         self.next_endpoint = defaultdict(lambda: defaultdict(int))
-        self.groups = list(set(x['group'] for x in self.endpoints.values()))
+        self.groups = set(x['group'] for x in self.endpoints.values())
         self.group_to_endpoints = {
             g: [e for (e, x) in self.endpoints.items() if x['group'] == g]
             for g in self.groups
         }
 
-    def choose_endpoint(self, func, payload):
-        res = {'ETA': time.time() + FUNCX_LATENCY}
+    def choose_endpoint(self, func, payload, exclude=None):
+        exclude = exclude or set()
+        assert(len(exclude) < len(self.endpoints))
+        excluded_groups = {g for (g, ends) in self.group_to_endpoints.items()
+                           if all(e in exclude for e in ends)}
+        groups = list(self.groups - excluded_groups)
+
         times = [(g, self.runtime(func=func, group=g, payload=payload))
-                 for g in self.groups]
+                 for g in groups]
         # Ignore groups which don't have predictions yet
         times = [(g, t) for (g, t) in times if t > 0.0]
 
         # Try each group once, and then start choosing the best one
-        if len(times) < len(self.groups):
-            group = self.groups[self.next_group[func]]
+        if len(times) < len(groups):
+            group = groups[self.next_group[func]]
             self.next_group[func] += 1
-            self.next_group[func] %= len(self.groups)
+            self.next_group[func] %= len(groups)
         else:
             group, runtime = min(times, key=lambda x: x[1])
-            res['ETA'] = time.time() + runtime + FUNCX_LATENCY
 
         # Round-robin between endpoints in the same group
-        i = self.next_endpoint[func][group]
-        res['endpoint'] = self.group_to_endpoints[group][i]
-        self.next_endpoint[func][group] += 1
-        self.next_endpoint[func][group] %= len(self.group_to_endpoints[group])
+        while True:
+            i = self.next_endpoint[func][group]
+            endpoint = self.group_to_endpoints[group][i]
+            self.next_endpoint[func][group] += 1
+            self.next_endpoint[func][group] %= \
+                len(self.group_to_endpoints[group])
+            if endpoint not in exclude:
+                break
 
-        return res
+        return {'endpoint': endpoint}
 
 
 class SmallestETA(Strategy):
@@ -104,36 +117,45 @@ class SmallestETA(Strategy):
         super().__init__(*args, **kwargs)
         self.next_group = defaultdict(int)
         self.next_endpoint = defaultdict(lambda: defaultdict(int))
-        self.groups = list(set(x['group'] for x in self.endpoints.values()))
+        self.groups = set(x['group'] for x in self.endpoints.values())
         self.group_to_endpoints = {
             g: [e for (e, x) in self.endpoints.items() if x['group'] == g]
             for g in self.groups
         }
 
-    def choose_endpoint(self, func, payload, *args, **kwargs):
-        res = {'ETA': time.time() + FUNCX_LATENCY}
+    def choose_endpoint(self, func, payload, exclude=None):
+        exclude = exclude or set()
+        assert(len(exclude) < len(self.endpoints))
+        excluded_groups = {g for (g, ends) in self.group_to_endpoints.items()
+                           if all(e in exclude for e in ends)}
+        groups = list(self.groups - excluded_groups)
+
         times = [(g, self.runtime(func=func, group=g, payload=payload))
-                 for g in self.groups]
+                 for g in groups]
         # Ignore groups which don't have predictions yet
         times = [(g, t) for (g, t) in times if t > 0.0]
 
         # Try each group once, and then start choosing the endpoint with
         # the smallest predicted ETA
-        if len(times) < len(self.groups):
-            group = self.groups[self.next_group[func]]
+        res = {}
+        if len(times) < len(groups):
+            group = groups[self.next_group[func]]
             self.next_group[func] += 1
-            self.next_group[func] %= len(self.groups)
+            self.next_group[func] %= len(groups)
 
             # Round-robin between endpoints in the same group
-            i = self.next_endpoint[func][group]
-            res['endpoint'] = self.group_to_endpoints[group][i]
-            self.next_endpoint[func][group] += 1
-            self.next_endpoint[func][group] %= \
-                len(self.group_to_endpoints[group])
+            while True:
+                i = self.next_endpoint[func][group]
+                res['endpoint'] = self.group_to_endpoints[group][i]
+                self.next_endpoint[func][group] += 1
+                self.next_endpoint[func][group] %= \
+                    len(self.group_to_endpoints[group])
+                if res['endpoint'] not in exclude:
+                    break
 
         else:
             ETAs = [(ep, self.predict_ETA(func, ep, payload))
-                    for ep in self.endpoints.keys()]
+                    for ep in self.endpoints.keys() if ep not in exclude]
             res['endpoint'], res['ETA'] = min(ETAs, key=lambda x: x[1])
 
         return res

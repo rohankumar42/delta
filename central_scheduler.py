@@ -45,7 +45,7 @@ class CentralScheduler(object):
         self.temperature = defaultdict(lambda: 'WARM')
 
         # Track which endpoints a function can't run on
-        self._blacklists = defaultdict(set)
+        self._blocked = defaultdict(set)
 
         # Track pending tasks
         # We will provide the client our own task ids, since we may submit the
@@ -92,17 +92,26 @@ class CentralScheduler(object):
         self._task_watchdog = Thread(target=self._monitor_tasks)
         self._task_watchdog.start()
 
-    def blacklist(self, func, endpoint):
-        # TODO: use blacklists in scheduling
+    def block(self, func, endpoint):
         if endpoint not in self._endpoints:
-            logger.error('Cannot blacklist unknown endpoint {}'
+            logger.error('Cannot block unknown endpoint {}'
                          .format(endpoint))
+            return {
+                'status': 'Failed',
+                'reason': 'Unknown endpoint {}'.format(endpoint)
+            }
+        elif len(self._blocked[func]) == len(self._endpoints) - 1:
+            logger.error('Cannot block last remaining endpoint {}'
+                         .format(endpoint))
+            return {
+                'status': 'Failed',
+                'reason': 'Cannot block all endpoints for {}'.format(func)
+            }
         else:
-            logger.info('Blacklisting endpoint {} for function {}'
+            logger.info('Blocking endpoint {} for function {}'
                         .format(endpoint, func))
-            self._blacklists[func].add(endpoint)
-
-        # TODO: return response message?
+            self._blocked[func].add(endpoint)
+            return {'status': 'Success'}
 
     def batch_submit(self, tasks, headers):
         # TODO: smarter scheduling for batch submissions
@@ -111,8 +120,9 @@ class CentralScheduler(object):
         endpoints = []
 
         for func, payload in tasks:
-            # TODO: do not choose a dead or blacklisted endpoint
-            choice = self.strategy.choose_endpoint(func, payload)
+            # TODO: do not choose a dead or blocked endpoint
+            choice = self.strategy.choose_endpoint(func, payload,
+                                                   exclude=self._blocked[func])
             endpoint = choice['endpoint']
             logger.debug('Choosing endpoint {} for func {}'
                          .format(endpoint_name(endpoint), func))
