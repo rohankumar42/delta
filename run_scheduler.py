@@ -102,6 +102,13 @@ def block(func, endpoint):
     return SCHEDULER.block(func, endpoint)
 
 
+@funcx_app.route('/execution_log', methods=['GET'])
+def execution_log():
+    log = SCHEDULER.execution_log
+    SCHEDULER.execution_log = []
+    return {'log': log}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--port', type=int, default=5000)

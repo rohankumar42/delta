@@ -55,7 +55,7 @@ class CentralScheduler(object):
         self._pending = {}
         self._pending_by_endpoint = defaultdict(set)
         self._latest_status = {}
-        self._last_task_ETA = {}
+        self._last_task_ETA = defaultdict(float)
         # Estimated error in the pending-task time of an endpoint.
         # Updated every time a task result is received from an endpoint.
         self._queue_error = defaultdict(float)
@@ -63,6 +63,7 @@ class CentralScheduler(object):
 
         # Set logging levels
         logger.setLevel(log_level)
+        self.execution_log = []
 
         # Intialize serializer
         self.fx_serializer = FuncXSerializer()
@@ -120,24 +121,34 @@ class CentralScheduler(object):
         endpoints = []
 
         for func, payload in tasks:
-            # TODO: do not choose a dead or blocked endpoint
-            exclude = self._blocked[func] | self._dead_endpoints
+            # TODO: do not choose a dead endpoint (reliably)
+            # exclude = self._blocked[func] | self._dead_endpoints
+            if len(self._dead_endpoints) > 0:
+                logger.warn('{} endpoints seem dead. Hope they still work!'
+                            .format(len(self._dead_endpoints)))
+            exclude = self._blocked[func]
             choice = self.strategy.choose_endpoint(func, payload,
                                                    exclude=exclude)
             endpoint = choice['endpoint']
             logger.debug('Choosing endpoint {} for func {}'
                          .format(endpoint_name(endpoint), func))
-            choice['ETA'] = choice.get('ETA', time.time())
+            choice['ETA'] = self.strategy.predict_ETA(func, endpoint, payload)
 
             # Create (fake) task id to return to client
             task_id = str(uuid.uuid4())
 
-            # Start Globus transfer of required files
+            # Start Globus transfer of required files, if any
             _, ser_kwargs = self.fx_serializer.unpack_buffers(payload)
             kwargs = self.fx_serializer.deserialize(ser_kwargs)
             files = kwargs['_globus_files']
-            transfer_ids = self._transfer_manger.transfer(files, endpoint,
-                                                          task_id)
+            if len(files) > 0:
+                transfer_num = self._transfer_manger.transfer(files, endpoint,
+                                                              task_id)
+            else:
+                transfer_num = None
+                # Record endpoint ETA for queue-delay prediction here,
+                # since task will be immediately scheduled
+                self._last_task_ETA[endpoint] = choice['ETA']
 
             # If a cold endpoint is being started, mark it as no longer cold,
             # so that subsequent launch-time predictions are correct (i.e., 0)
@@ -155,7 +166,7 @@ class CentralScheduler(object):
                 'endpoint_id': endpoint,
                 'payload': payload,
                 'headers': headers,
-                'transfer_ids': transfer_ids
+                'transfer_num': transfer_num
             }
 
             # Schedule task for sending to FuncX
@@ -223,16 +234,12 @@ class CentralScheduler(object):
             return self._latest_status[task_id]
 
     def queue_delay(self, endpoint):
-        # If there are no pending tasks on endpoint, no queue delay.
         # Otherwise, queue delay is the ETA of most recent task,
         # plus the estimated error in the ETA prediction.
-        if len(self._pending_by_endpoint[endpoint]) == 0:
-            delay = time.time()
-        else:
-            delay = self._last_task_ETA[endpoint] + self._queue_error[endpoint]
-            delay = max(delay, time.time())
-
-        return delay
+        # Note that if there are no pending tasks on endpoint, no queue delay.
+        # This is implicit since, in this case, both summands will be 0.
+        delay = self._last_task_ETA[endpoint] + self._queue_error[endpoint]
+        return max(delay, time.time())
 
     def _record_completed(self, real_task_id):
         info = self._pending[real_task_id]
@@ -240,11 +247,16 @@ class CentralScheduler(object):
 
         # If this is the last pending task on this endpoint, reset ETA offset
         if len(self._pending_by_endpoint[endpoint]) == 1:
+            self._last_task_ETA[endpoint] = 0.0
             self._queue_error[endpoint] = 0.0
         else:
             prediction_error = time.time() - self._pending[real_task_id]['ETA']
             self._queue_error[endpoint] = prediction_error
             # print(colored(f'Prediction error {prediction_error}', 'red'))
+
+        info['ATA'] = time.time()
+        del info['headers']
+        self.execution_log.append(info)
 
         logger.info('Task exec time: expected = {:.3f}, actual = {:.3f}'
                     .format(info['ETA'] - info['time_sent'],
@@ -287,7 +299,8 @@ class CentralScheduler(object):
             # Filter out all tasks whose data transfer has not been completed
             ready_to_send = set()
             for task_id, info in scheduled.items():
-                if self._transfer_manger.is_complete(info['transfer_ids']):
+                if info['transfer_num'] is None or \
+                        self._transfer_manger.is_complete(info['transfer_num']):
                     ready_to_send.add(task_id)
                 else:  # This task cannot be scheduled yet
                     continue

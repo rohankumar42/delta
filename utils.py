@@ -26,4 +26,4 @@ def fmt_time(t=None, fmt='%H:%M:%S'):
 
 def endpoint_name(endpoint):
     name = ENDPOINTS[endpoint]['name']
-    return f'{name:16}'
+    return f'{name:20}'
