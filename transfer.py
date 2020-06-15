@@ -1,4 +1,6 @@
 import os
+import uuid
+import time
 import logging
 from threading import Thread
 
@@ -40,18 +42,17 @@ class TransferManager(object):
 
         # Track pending transfers
         self._next = 0
-        self._active_transfers = {}
-        self._completed_transfers = set()
-        self._transfer_ids = {}
+        self.active_transfers = {}
+        self.completed_transfers = {}
+        self.transfer_ids = {}
 
         # Initialize thread to wait on transfers
-        self._timeout = 1
         self._polling_interval = 1
         self._tracker = Thread(target=self._track_transfers)
         self._tracker.daemon = True
         self._tracker.start()
 
-    def transfer(self, files_by_src, dst, task_id=''):
+    def transfer(self, files_by_src, dst, task_id='', unique_name=False):
         self._next += 1
 
         n = len(files_by_src)
@@ -72,37 +73,67 @@ class TransferManager(object):
                                             sync_level=self.sync_level)
 
             for f in files:
-                tdata.add_item(f, f)
+                if unique_name:
+                    dst_file = '~/.globus_funcx/test_{}.txt'.format(
+                        str(uuid.uuid4()))
+                    logger.debug('Unique destination file name: {}'
+                                 .format(dst_file))
+                    tdata.add_item(f, dst_file)
+                else:
+                    tdata.add_item(f, f)
 
             res = self.transfer_client.submit_transfer(tdata)
 
             if res['code'] != 'Accepted':
                 raise ValueError('Transfer not accepted')
 
-            self._active_transfers[res['task_id']] = f'{task_id} ({i}/{n})'
+            self.active_transfers[res['task_id']] = {
+                'src': src_globus,
+                'dst': dst_globus,
+                'files': files,
+                'name': f'{task_id} ({i}/{n})',
+                'submission_time': time.time()
+            }
             transfer_ids.append(res['task_id'])
 
-        self._transfer_ids[self._next] = transfer_ids
+        self.transfer_ids[self._next] = transfer_ids
 
         return self._next
 
     def is_complete(self, num):
         assert(num <= self._next)
 
-        return all(t in self._completed_transfers
-                   for t in self._transfer_ids[num])
+        return all(t in self.completed_transfers
+                   for t in self.transfer_ids[num])
+
+    def wait(self, num):
+        while not self.is_complete(num):
+            pass
 
     def _track_transfers(self):
         logger.info('Started transfer tracking thread')
 
         while True:
+            time.sleep(self._polling_interval)
 
-            for transfer_id, label in list(self._active_transfers.items()):
-                completed = self.transfer_client.task_wait(
-                    transfer_id, timeout=self._timeout,
-                    polling_interval=self._polling_interval)
+            for transfer_id, info in list(self.active_transfers.items()):
+                name = info['name']
+                status = self.transfer_client.get_task(transfer_id)
 
-                if completed:
-                    logger.info(f'Globus transfer finished: {label}')
-                    self._completed_transfers.add(transfer_id)
-                    del self._active_transfers[transfer_id]
+                if status['status'] == 'FAILED':
+                    logger.error('Task {} failed. Canceling task!'
+                                 .format(transfer_id))
+                    res = self.transfer_client.cancel_task(transfer_id)
+                    if res['code'] != 'Canceled':
+                        logger.error('Could not cancel task {}. Reason: {}'
+                                     .format(transfer_id, res['message']))
+                    del self.active_transfers[transfer_id]
+
+                elif status['status'] == 'ACTIVE':
+                    continue
+
+                elif status['status'] == 'SUCCEEDED':
+                    logger.info(f'Globus transfer finished: {name}')
+                    info['time_taken'] = time.time() - info['submission_time']
+                    self.completed_transfers[transfer_id] = info
+                    del self.active_transfers[transfer_id]
