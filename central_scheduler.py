@@ -12,7 +12,7 @@ from funcx.serialize import FuncXSerializer
 from utils import colored, endpoint_name
 from transfer import TransferManager
 from strategies import init_strategy
-from predictors import init_runtime_predictor
+from predictors import init_runtime_predictor, TransferPredictor
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,8 @@ class CentralScheduler(object):
 
     def __init__(self, endpoints, strategy='round-robin',
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
-                 log_level='INFO', *args, **kwargs):
+                 log_level='INFO', transfer_model_file='transfer_model.json',
+                 *args, **kwargs):
         self._fxc = FuncXClient(*args, **kwargs)
 
         # Initialize a transfer client
@@ -70,17 +71,23 @@ class CentralScheduler(object):
         self.fx_serializer.use_custom('03\n', 'code')
 
         # Initialize runtime predictor
-        self.predictor = init_runtime_predictor(runtime_predictor,
-                                                endpoints=endpoints,
-                                                last_n=last_n,
-                                                train_every=train_every)
-        logger.info(f"Runtime predictor using strategy {self.predictor}")
+        self.runtime = init_runtime_predictor(runtime_predictor,
+                                              endpoints=endpoints,
+                                              last_n=last_n,
+                                              train_every=train_every)
+        logger.info(f"Runtime predictor using strategy {self.runtime}")
+
+        # Initialize transfer-time predictor
+        self.transfer_time = TransferPredictor(endpoints=endpoints,
+                                               train_every=train_every,
+                                               state_file=transfer_model_file)
 
         # Initialize scheduling strategy
         self.strategy = init_strategy(strategy, endpoints=endpoints,
-                                      runtime_predictor=self.predictor,
+                                      runtime_predictor=self.runtime,
                                       queue_predictor=self.queue_delay,
-                                      launch_predictor=self.launch_time)
+                                      launch_predictor=self.launch_time,
+                                      transfer_predictor=self.transfer_time)
         logger.info(f"Scheduler using strategy {self.strategy}")
 
         # Start thread to check on endpoints regularly
@@ -121,26 +128,28 @@ class CentralScheduler(object):
         endpoints = []
 
         for func, payload in tasks:
+            _, ser_kwargs = self.fx_serializer.unpack_buffers(payload)
+            kwargs = self.fx_serializer.deserialize(ser_kwargs)
+            files = kwargs['_globus_files']
+
             # TODO: do not choose a dead endpoint (reliably)
             # exclude = self._blocked[func] | self._dead_endpoints
             if len(self._dead_endpoints) > 0:
                 logger.warn('{} endpoints seem dead. Hope they still work!'
                             .format(len(self._dead_endpoints)))
             exclude = self._blocked[func]
-            choice = self.strategy.choose_endpoint(func, payload,
+            choice = self.strategy.choose_endpoint(func, payload, files=files,
                                                    exclude=exclude)
             endpoint = choice['endpoint']
             logger.debug('Choosing endpoint {} for func {}'
                          .format(endpoint_name(endpoint), func))
-            choice['ETA'] = self.strategy.predict_ETA(func, endpoint, payload)
+            choice['ETA'] = self.strategy.predict_ETA(func, endpoint, payload,
+                                                      files=files)
 
             # Create (fake) task id to return to client
             task_id = str(uuid.uuid4())
 
             # Start Globus transfer of required files, if any
-            _, ser_kwargs = self.fx_serializer.unpack_buffers(payload)
-            kwargs = self.fx_serializer.deserialize(ser_kwargs)
-            files = kwargs['_globus_files']
             if len(files) > 0:
                 transfer_num = self._transfer_manger.transfer(files, endpoint,
                                                               task_id)
@@ -199,7 +208,7 @@ class CentralScheduler(object):
             logger.info('Got result from {} for task {} with time {}'
                         .format(name, real_task_id, runtime))
 
-            self.predictor.update(self._pending[real_task_id], runtime)
+            self.runtime.update(self._pending[real_task_id], runtime)
             self._record_completed(real_task_id)
             self.last_result_time[endpoint] = time.time()
 
@@ -334,6 +343,8 @@ class CentralScheduler(object):
             # Update task info with submission info
             for task_id, real_task_id in zip(ready_to_send, res['task_uuids']):
                 info = scheduled[task_id]
+                # This ETA calculation does not take into account transfer time
+                # since, at this point, the transfer has already completed.
                 info['ETA'] = self.strategy.predict_ETA(info['function_id'],
                                                         info['endpoint_id'],
                                                         info['payload'])

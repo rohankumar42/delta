@@ -23,6 +23,9 @@ CLIENT_ID = 'f06739da-ad7d-40bd-887f-abb1d23bbd6f'
 
 class TransferManager(object):
 
+    # TODO: move TransferPredictor into this class and update prediction model
+    # every time a tranfer finishes
+
     def __init__(self, endpoints, sync_level='exists', log_level='INFO'):
 
         transfer_scope = 'urn:globus:auth:scope:transfer.api.globus.org:all'
@@ -58,10 +61,16 @@ class TransferManager(object):
         n = len(files_by_src)
 
         transfer_ids = []
-        for i, (src, files) in enumerate(files_by_src.items(), 1):
+        for i, (src, pairs) in enumerate(files_by_src.items(), 1):
             src_name = endpoint_name(src)
             dst_name = endpoint_name(dst)
-            logger.debug(f'Transferring {src_name} to {dst_name}: {files}')
+
+            if src == dst:
+                logger.debug(f'Skipped transfer from {src_name} to {dst_name}')
+                continue
+
+            files, _ = zip(*pairs)
+            logger.info(f'Transferring {src_name} to {dst_name}: {files}')
 
             src_globus = self.endpoints[src]['globus']
             dst_globus = self.endpoints[dst]['globus']

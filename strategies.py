@@ -1,27 +1,31 @@
 import time
 from collections import defaultdict
-from predictors import RuntimePredictor
+from predictors import RuntimePredictor, TransferPredictor
 
 
-FUNCX_LATENCY = 0.5  # Estimated overhead of executing task
+FUNCX_LATENCY = 0.25  # Estimated overhead of executing task
 
 
 class Strategy(object):
 
-    def __init__(self, endpoints, runtime_predictor: RuntimePredictor,
-                 queue_predictor, launch_predictor):
+    def __init__(self, endpoints,
+                 runtime_predictor: RuntimePredictor,
+                 queue_predictor, launch_predictor,
+                 transfer_predictor: TransferPredictor):
         if len(endpoints) == 0:
             raise ValueError("List of endpoints cannot be empty")
         assert(callable(runtime_predictor))
         assert(callable(queue_predictor))
         assert(callable(launch_predictor))
+        assert(callable(transfer_predictor))
 
         self.endpoints = endpoints
         self.runtime = runtime_predictor
         self.queue_predictor = queue_predictor
         self.launch_predictor = launch_predictor
+        self.transfer_predictor = transfer_predictor
 
-    def choose_endpoint(self, func, payload, exclude=None):
+    def choose_endpoint(self, func, payload, files=None, exclude=None):
         raise NotImplementedError
 
     def add_endpoint(self, endpoint, group):
@@ -32,17 +36,21 @@ class Strategy(object):
         if endpoint in self.endpoints:
             del self.endpoints[endpoint]
 
-    def predict_ETA(self, func, endpoint, payload):
-        # TODO: better task ETA prediction by including data movement,
-        # latency, and other costs
+    def predict_ETA(self, func, endpoint, payload, files=None):
+        # TODO: a latency predictor
 
         t_launch = self.launch_predictor(endpoint)
         t_pending = self.queue_predictor(endpoint)
+        t_transfer = time.time()
+        if files is not None:
+            t_transfer += self.transfer_predictor(files, endpoint)
         t_run = self.runtime(func=func,
                              group=self.endpoints[endpoint]['group'],
                              payload=payload)
 
-        return t_launch + t_pending + t_run + FUNCX_LATENCY
+        # Transfer and pending tasks happen concurrently, so we only take into
+        # account the slower of the two
+        return t_launch + max(t_pending, t_transfer) + t_run + FUNCX_LATENCY
 
     def __str__(self):
         return type(self).__name__
@@ -54,7 +62,7 @@ class RoundRobin(Strategy):
         super().__init__(*args, **kwargs)
         self.next = 0
 
-    def choose_endpoint(self, func, payload, exclude=None):
+    def choose_endpoint(self, func, payload, files=None, exclude=None):
         exclude = exclude or set()
         assert(len(exclude) < len(self.endpoints))
         endpoints = list(self.endpoints.keys())
@@ -78,7 +86,7 @@ class FastestEndpoint(Strategy):
             for g in self.groups
         }
 
-    def choose_endpoint(self, func, payload, exclude=None):
+    def choose_endpoint(self, func, payload, files=None, exclude=None):
         exclude = exclude or set()
         assert(len(exclude) < len(self.endpoints))
         excluded_groups = {g for (g, ends) in self.group_to_endpoints.items()
@@ -123,7 +131,7 @@ class SmallestETA(Strategy):
             for g in self.groups
         }
 
-    def choose_endpoint(self, func, payload, exclude=None):
+    def choose_endpoint(self, func, payload, files=None, exclude=None):
         exclude = exclude or set()
         assert(len(exclude) < len(self.endpoints))
         excluded_groups = {g for (g, ends) in self.group_to_endpoints.items()
@@ -154,7 +162,7 @@ class SmallestETA(Strategy):
                     break
 
         else:
-            ETAs = [(ep, self.predict_ETA(func, ep, payload))
+            ETAs = [(ep, self.predict_ETA(func, ep, payload, files=files))
                     for ep in self.endpoints.keys() if ep not in exclude]
             res['endpoint'], res['ETA'] = min(ETAs, key=lambda x: x[1])
 
