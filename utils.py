@@ -26,4 +26,11 @@ def fmt_time(t=None, fmt='%H:%M:%S'):
 
 def endpoint_name(endpoint):
     name = ENDPOINTS[endpoint]['name']
-    return f'{name:20}'
+    return '{:20}'.format(name)
+
+
+def endpoint_id(name):
+    for e, info in ENDPOINTS.items():
+        if info['name'] == name:
+            return e
+    raise KeyError('No endpoint with name {}'.format(name))

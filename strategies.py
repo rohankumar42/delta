@@ -3,7 +3,7 @@ from collections import defaultdict
 from predictors import RuntimePredictor, TransferPredictor
 
 
-FUNCX_LATENCY = 0.25  # Estimated overhead of executing task
+FUNCX_LATENCY = 0.1  # Estimated overhead of executing task
 
 
 class Strategy(object):

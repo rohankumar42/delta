@@ -63,7 +63,7 @@ class InputLength(RuntimePredictor):
         self.updates_since_train = defaultdict(lambda: defaultdict(int))
 
     def predict(self, func, group, payload, *args, **kwargs):
-        pred = self.weights[func][group].T @ self._preprocess(len(payload))
+        pred = self.weights[func][group].T.dot(self._preprocess(len(payload)))
         return pred.item()
 
     def update(self, task_info, new_runtime):
@@ -84,11 +84,11 @@ class InputLength(RuntimePredictor):
                             for x in self.lengths[func][group]])
         lengths = lengths.reshape((-1, 4))
         runtimes = np.array([self.runtimes[func][group]]).reshape((-1, 1))
-        self.weights[func][group] = np.linalg.pinv(lengths) @ runtimes
+        self.weights[func][group] = np.linalg.pinv(lengths).dot(runtimes)
 
     def _preprocess(self, x):
         '''Create features that are easy to learn from.'''
-        return np.array([1, x, x ** 2, 2 ** x])
+        return np.array([1, x, x ** 2, 2.0 * x])
 
 
 def init_runtime_predictor(predictor, *args, **kwargs):
@@ -124,7 +124,7 @@ class TransferPredictor(object):
         src_grp = self.endpoints[src]['transfer_group']
         dst_grp = self.endpoints[dst]['transfer_group']
 
-        pred = self.weights[src_grp][dst_grp].T @ self._preprocess(size)
+        pred = self.weights[src_grp][dst_grp].T.dot(self._preprocess(size))
         return pred.item()
 
     def predict(self, files_by_src, dst):
@@ -132,6 +132,9 @@ class TransferPredictor(object):
         the maximum. Assumption: all transfers will happen concurrently.'''
 
         assert(len(files_by_src) <= self.MAX_CONCURRENT_TRANSFERS)
+
+        if len(files_by_src) == 0:
+            return 0.0
 
         times = []
         for src, pairs in files_by_src.items():
@@ -157,7 +160,7 @@ class TransferPredictor(object):
                           for x in self.sizes[src_grp][dst_grp]])
         sizes = sizes.reshape((-1, 3))
         times = np.array([self.times[src_grp][dst_grp]]).reshape((-1, 1))
-        self.weights[src_grp][dst_grp] = np.linalg.pinv(sizes) @ times
+        self.weights[src_grp][dst_grp] = np.linalg.pinv(sizes).dot(times)
 
     def _preprocess(self, x):
         '''Create features that are easy to learn from.'''
