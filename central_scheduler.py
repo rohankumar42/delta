@@ -32,7 +32,7 @@ class CentralScheduler(object):
     def __init__(self, endpoints, strategy='round-robin',
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
                  log_level='INFO', transfer_model_file='transfer_model.json',
-                 *args, **kwargs):
+                 max_backups=0, *args, **kwargs):
         self._fxc = FuncXClient(*args, **kwargs)
 
         # Initialize a transfer client
@@ -55,12 +55,15 @@ class CentralScheduler(object):
         self._task_id_translation = {}
         self._pending = {}
         self._pending_by_endpoint = defaultdict(set)
+        self._task_info = {}
+        # List of endpoints a (virtual) task was scheduled to
+        self._endpoints_sent_to = defaultdict(list)
+        self.max_backups = max_backups
         self._latest_status = {}
         self._last_task_ETA = defaultdict(float)
         # Estimated error in the pending-task time of an endpoint.
         # Updated every time a task result is received from an endpoint.
         self._queue_error = defaultdict(float)
-        # self._num_backups_sent = {}  # TODO: backup tasks
 
         # Set logging levels
         logger.setLevel(log_level)
@@ -132,59 +135,72 @@ class CentralScheduler(object):
             kwargs = self.fx_serializer.deserialize(ser_kwargs)
             files = kwargs['_globus_files']
 
-            # TODO: do not choose a dead endpoint (reliably)
-            # exclude = self._blocked[func] | self._dead_endpoints
-            if len(self._dead_endpoints) > 0:
-                logger.warn('{} endpoints seem dead. Hope they still work!'
-                            .format(len(self._dead_endpoints)))
-            exclude = self._blocked[func]
-            choice = self.strategy.choose_endpoint(func, payload, files=files,
-                                                   exclude=exclude)
-            endpoint = choice['endpoint']
-            logger.debug('Choosing endpoint {} for func {}'
-                         .format(endpoint_name(endpoint), func))
-            choice['ETA'] = self.strategy.predict_ETA(func, endpoint, payload,
-                                                      files=files)
-
-            # Create (fake) task id to return to client
-            task_id = str(uuid.uuid4())
-
-            # Start Globus transfer of required files, if any
-            if len(files) > 0:
-                transfer_num = self._transfer_manger.transfer(files, endpoint,
-                                                              task_id)
-            else:
-                transfer_num = None
-                # Record endpoint ETA for queue-delay prediction here,
-                # since task will be immediately scheduled
-                self._last_task_ETA[endpoint] = choice['ETA']
-
-            # If a cold endpoint is being started, mark it as no longer cold,
-            # so that subsequent launch-time predictions are correct (i.e., 0)
-            if self.temperature[endpoint] == 'COLD':
-                self.temperature[endpoint] = 'WARMING'
-                logger.info('A cold endpoint {} was chosen; marked as warming.'
-                            .format(endpoint_name(endpoint)))
-
-            # Store task information
-            self._task_id_translation[task_id] = set()
-            info = {
-                'task_id': task_id,
-                'ETA': choice['ETA'],
-                'function_id': func,
-                'endpoint_id': endpoint,
-                'payload': payload,
-                'headers': headers,
-                'transfer_num': transfer_num
-            }
-
-            # Schedule task for sending to FuncX
-            self._scheduled_tasks.put((task_id, info))
-
+            task_id, endpoint = self._schedule_task(func=func,
+                                                    payload=payload,
+                                                    headers=headers,
+                                                    files=files)
             task_ids.append(task_id)
             endpoints.append(endpoint)
 
         return task_ids, endpoints
+
+    def _schedule_task(self, func, payload, headers, files,
+                       task_id=None):
+
+        # If this is the first time scheduling this task_id
+        # (i.e., non-backup task), record the necessary metadata
+        if task_id is None:
+            # Create (fake) task id to return to client
+            task_id = str(uuid.uuid4())
+
+            # Store task information
+            self._task_id_translation[task_id] = set()
+
+            # Information required to schedule the task, now and in the future
+            info = {
+                'function_id': func,
+                'payload': payload,
+                'headers': headers,
+                'files': files,
+            }
+            self._task_info[task_id] = info
+
+        # TODO: do not choose a dead endpoint (reliably)
+        # exclude = self._blocked[func] | self._dead_endpoints | | set(self._endpoints_sent_to[task_id])
+        if len(self._dead_endpoints) > 0:
+            logger.warn('{} endpoints seem dead. Hope they still work!'
+                        .format(len(self._dead_endpoints)))
+        exclude = self._blocked[func] | set(self._endpoints_sent_to[task_id])
+        choice = self.strategy.choose_endpoint(func, payload, files=files,
+                                               exclude=exclude)
+        endpoint = choice['endpoint']
+        logger.debug('Choosing endpoint {} for func {}'
+                     .format(endpoint_name(endpoint), func))
+        choice['ETA'] = self.strategy.predict_ETA(func, endpoint, payload,
+                                                  files=files)
+
+        # Start Globus transfer of required files, if any
+        if len(files) > 0:
+            transfer_num = self._transfer_manger.transfer(files, endpoint,
+                                                          task_id)
+        else:
+            transfer_num = None
+            # Record endpoint ETA for queue-delay prediction here,
+            # since task will be immediately scheduled
+            self._last_task_ETA[endpoint] = choice['ETA']
+
+        # If a cold endpoint is being started, mark it as no longer cold,
+        # so that subsequent launch-time predictions are correct (i.e., 0)
+        if self.temperature[endpoint] == 'COLD':
+            self.temperature[endpoint] = 'WARMING'
+            logger.info('A cold endpoint {} was chosen; marked as warming.'
+                        .format(endpoint_name(endpoint)))
+
+        # Schedule task for sending to FuncX
+        self._endpoints_sent_to[task_id].append(endpoint)
+        self._scheduled_tasks.put((task_id, endpoint, transfer_num))
+
+        return task_id, endpoint
 
     def translate_task_id(self, task_id):
         return self._task_id_translation[task_id]
@@ -275,6 +291,7 @@ class CentralScheduler(object):
         # Stop tracking this task
         del self._pending[real_task_id]
         self._pending_by_endpoint[endpoint].remove(real_task_id)
+        del self._task_info[info['task_id']]
 
     def launch_time(self, endpoint):
         # If endpoint is warm, there is no launch time
@@ -300,8 +317,16 @@ class CentralScheduler(object):
             # Get newly scheduled tasks
             while True:
                 try:
-                    task_id, info = self._scheduled_tasks.get_nowait()
-                    scheduled[task_id] = info
+                    task_id, end, num = self._scheduled_tasks.get_nowait()
+                    if task_id not in self._task_info:
+                        logger.warn('Task id {} scheduled but no info found'
+                                    .format(task_id))
+                        continue
+                    info = self._task_info[task_id]
+                    scheduled[task_id] = dict(info)  # Create new copy of info
+                    scheduled[task_id]['task_id'] = task_id
+                    scheduled[task_id]['endpoint_id'] = end
+                    scheduled[task_id]['transfer_num'] = num
                 except Empty:
                     break
 
@@ -396,6 +421,9 @@ class CentralScheduler(object):
                                     'Last heartbeat was {:.2f} seconds ago.'
                                     .format(endpoint_name(end), age))
 
+                    if is_dead:
+                        self._send_backups_if_needed(end)
+
                     # Mark endpoint as "cold" or "warm" depending on if it
                     # has active managers (nodes) allocated to it
                     if self.temperature[end] == 'WARM' \
@@ -410,4 +438,21 @@ class CentralScheduler(object):
                                     .format(endpoint_name(end)))
 
             # Sleep before checking statuses again
-            time.sleep(15)
+            time.sleep(5)
+
+    def _send_backups_if_needed(self, endpoint):
+        # Get all tasks which have not been completed yet and still have a
+        # pending (real) task on this endpoint
+        task_ids = {
+            self._pending[t]['task_id']
+            for t in self._pending_by_endpoint[endpoint]
+            if self._pending[t]['task_id'] in self._task_info
+        }
+
+        for task_id in task_ids:
+            if len(self._endpoints_sent_to[task_id]) > self.max_backups:
+                logger.warn(f'Skipping sending new backup task for {task_id}')
+            else:
+                info = self._task_info[task_id]
+                self._schedule_task(info['function_id'], info['payload'],
+                                    info['headers'], info['files'], task_id)

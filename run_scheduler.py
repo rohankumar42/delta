@@ -55,8 +55,12 @@ def batch_status():
     if len(real_task_ids) > 0:
         real_data = json.dumps({'task_ids': list(real_task_ids)})
         res = forward_request(request, data=real_data)
-        for real_task_id, status in json.loads(res.text)['results'].items():
-            SCHEDULER.log_status(real_task_id, status)
+        try:
+            for real_task_id, status in json.loads(res.text)['results'].items():
+                SCHEDULER.log_status(real_task_id, status)
+        except json.decoder.JSONDecodeError as e:
+            funcx_app.logger.warn(
+                f'Could not get batch result from {res.text}', e)
 
     res_data = {'response': 'batch', 'results': {}}
     for task_id in task_ids:
@@ -119,6 +123,7 @@ if __name__ == "__main__":
                         default='rolling-average')
     parser.add_argument('--last-n', type=int, default=3)
     parser.add_argument('--train-every', type=int, default=1)
+    parser.add_argument('-b', '--max-backups', type=int, default=0)
     parser.add_argument('--log-level', type=str, default='INFO')
     args = parser.parse_args()
 
@@ -131,6 +136,7 @@ if __name__ == "__main__":
                                  runtime_predictor=args.predictor,
                                  last_n=args.last_n,
                                  train_every=args.train_every,
+                                 max_backups=args.max_backups,
                                  log_level=args.log_level)
 
     funcx_app.run(host='0.0.0.0', port=args.port, debug=args.debug,
