@@ -10,19 +10,19 @@ class Strategy(object):
 
     def __init__(self, endpoints,
                  runtime_predictor: RuntimePredictor,
-                 queue_predictor, launch_predictor,
+                 queue_predictor, cold_start_predictor,
                  transfer_predictor: TransferPredictor):
         if len(endpoints) == 0:
             raise ValueError("List of endpoints cannot be empty")
         assert(callable(runtime_predictor))
         assert(callable(queue_predictor))
-        assert(callable(launch_predictor))
+        assert(callable(cold_start_predictor))
         assert(callable(transfer_predictor))
 
         self.endpoints = endpoints
         self.runtime = runtime_predictor
         self.queue_predictor = queue_predictor
-        self.launch_predictor = launch_predictor
+        self.cold_start_predictor = cold_start_predictor
         self.transfer_predictor = transfer_predictor
 
     def choose_endpoint(self, func, payload, files=None, exclude=None):
@@ -39,7 +39,7 @@ class Strategy(object):
     def predict_ETA(self, func, endpoint, payload, files=None):
         # TODO: a latency predictor
 
-        t_launch = self.launch_predictor(endpoint)
+        t_cold = self.cold_start_predictor(endpoint, func)
         t_pending = self.queue_predictor(endpoint)
         t_transfer = time.time()
         if files is not None:
@@ -50,7 +50,7 @@ class Strategy(object):
 
         # Transfer and pending tasks happen concurrently, so we only take into
         # account the slower of the two
-        return t_launch + max(t_pending, t_transfer) + t_run + FUNCX_LATENCY
+        return t_cold + max(t_pending, t_transfer) + t_run + FUNCX_LATENCY
 
     def __str__(self):
         return type(self).__name__
@@ -99,10 +99,9 @@ class FastestEndpoint(Strategy):
         times = [(g, t) for (g, t) in times if t > 0.0]
 
         # Try each group once, and then start choosing the best one
-        if len(times) < len(groups):
-            group = groups[self.next_group[func]]
+        if self.next_group[func] < len(groups) or len(times) == 0:
+            group = groups[self.next_group[func] % len(groups)]
             self.next_group[func] += 1
-            self.next_group[func] %= len(groups)
         else:
             group, runtime = min(times, key=lambda x: x[1])
 
@@ -141,15 +140,14 @@ class SmallestETA(Strategy):
         times = [(g, self.runtime(func=func, group=g, payload=payload))
                  for g in groups]
         # Ignore groups which don't have predictions yet
-        times = [(g, t) for (g, t) in times if t > 0.0]
+        times = dict((g, t) for (g, t) in times if t > 0.0)
 
         # Try each group once, and then start choosing the endpoint with
         # the smallest predicted ETA
         res = {}
-        if len(times) < len(groups):
-            group = groups[self.next_group[func]]
+        if self.next_group[func] < len(groups) or len(times) == 0:
+            group = groups[self.next_group[func] % len(groups)]
             self.next_group[func] += 1
-            self.next_group[func] %= len(groups)
 
             # Round-robin between endpoints in the same group
             while True:
@@ -162,8 +160,10 @@ class SmallestETA(Strategy):
                     break
 
         else:
+            # Choose the smallest ETA from groups we have predictions for
             ETAs = [(ep, self.predict_ETA(func, ep, payload, files=files))
-                    for ep in self.endpoints.keys() if ep not in exclude]
+                    for ep in self.endpoints.keys() if ep not in exclude
+                    and self.endpoints[ep]['group'] in times]
             res['endpoint'], res['ETA'] = min(ETAs, key=lambda x: x[1])
 
         return res

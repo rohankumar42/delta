@@ -12,7 +12,8 @@ from funcx.serialize import FuncXSerializer
 from utils import colored, endpoint_name
 from transfer import TransferManager
 from strategies import init_strategy
-from predictors import init_runtime_predictor, TransferPredictor
+from predictors import init_runtime_predictor, TransferPredictor, \
+    ImportPredictor
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,8 @@ class CentralScheduler(object):
     def __init__(self, endpoints, strategy='round-robin',
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
                  log_level='INFO', transfer_model_file='transfer_model.json',
-                 max_backups=0, *args, **kwargs):
+                 import_model_file=None, max_backups=0,
+                 *args, **kwargs):
         self._fxc = FuncXClient(*args, **kwargs)
 
         # Initialize a transfer client
@@ -44,6 +46,8 @@ class CentralScheduler(object):
         self._dead_endpoints = set()
         self.last_result_time = defaultdict(float)
         self.temperature = defaultdict(lambda: 'WARM')
+        self._imports = defaultdict(list)
+        self._imports_required = defaultdict(list)
 
         # Track which endpoints a function can't run on
         self._blocked = defaultdict(set)
@@ -85,11 +89,15 @@ class CentralScheduler(object):
                                                train_every=train_every,
                                                state_file=transfer_model_file)
 
+        # Initialize import-time predictor
+        self.import_predictor = ImportPredictor(endpoints=endpoints,
+                                                state_file=import_model_file)
+
         # Initialize scheduling strategy
         self.strategy = init_strategy(strategy, endpoints=endpoints,
                                       runtime_predictor=self.runtime,
                                       queue_predictor=self.queue_delay,
-                                      launch_predictor=self.launch_time,
+                                      cold_start_predictor=self.cold_start,
                                       transfer_predictor=self.transfer_time)
         logger.info(f"Scheduler using strategy {self.strategy}")
 
@@ -123,6 +131,11 @@ class CentralScheduler(object):
                         .format(endpoint, func))
             self._blocked[func].add(endpoint)
             return {'status': 'Success'}
+
+    def register_imports(self, func, imports):
+        logger.info('Registered function {} with import {}'
+                    .format(func, imports))
+        self._imports_required[func] = imports
 
     def batch_submit(self, tasks, headers):
         # TODO: smarter scheduling for batch submissions
@@ -227,6 +240,7 @@ class CentralScheduler(object):
             self.runtime.update(self._pending[real_task_id], runtime)
             self._record_completed(real_task_id)
             self.last_result_time[endpoint] = time.time()
+            self._imports[endpoint] = result['imports']
 
         elif 'exception' in data:
             exception = self.fx_serializer.deserialize(data['exception'])
@@ -293,17 +307,27 @@ class CentralScheduler(object):
         self._pending_by_endpoint[endpoint].remove(real_task_id)
         del self._task_info[info['task_id']]
 
-    def launch_time(self, endpoint):
+    def cold_start(self, endpoint, func):
         # If endpoint is warm, there is no launch time
         if self.temperature[endpoint] != 'COLD':
-            return 0.0
+            launch_time = 0.0
         # Otherwise, return the launch time in the endpoint config
         elif 'launch_time' in self._endpoints[endpoint]:
-            return self._endpoints[endpoint]['launch_time']
+            launch_time = self._endpoints[endpoint]['launch_time']
         else:
             logger.warn('Endpoint {} should always be warm, but is cold'
                         .format(endpoint_name(endpoint)))
-            return 0.0
+            launch_time = 0.0
+
+        # Time to import dependencies
+        import_time = 0.0
+        for pkg in self._imports_required[func]:
+            if pkg not in self._imports[endpoint]:
+                logger.debug('Cold-start has import time for pkg {} on {}'
+                             .format(pkg, endpoint_name(endpoint)))
+                import_time += self.import_predictor(pkg, endpoint)
+
+        return launch_time + import_time
 
     def _monitor_tasks(self):
         logger.info('Starting task-watchdog thread')
@@ -449,9 +473,13 @@ class CentralScheduler(object):
             if self._pending[t]['task_id'] in self._task_info
         }
 
+        if len(task_ids) > 0:
+            logger.info('Found {} tasks pending on dead endpoints'
+                        .format(len(task_ids)))
+
         for task_id in task_ids:
             if len(self._endpoints_sent_to[task_id]) > self.max_backups:
-                logger.warn(f'Skipping sending new backup task for {task_id}')
+                logger.debug(f'Skipping sending new backup task for {task_id}')
             else:
                 info = self._task_info[task_id]
                 self._schedule_task(info['function_id'], info['payload'],

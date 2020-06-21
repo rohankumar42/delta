@@ -204,3 +204,38 @@ class TransferPredictor(object):
 
     def __str__(self):
         return type(self).__name__
+
+
+class ImportPredictor(object):
+
+    def __init__(self, endpoints=None, state_file=None):
+        self.endpoints = endpoints or ENDPOINTS
+        self.import_times = defaultdict(lambda: defaultdict(float))
+
+        if state_file is not None:
+            self._load_state_from_file(state_file)
+
+    def record(self, pkg, endpoint, import_time):
+        group = self.endpoints[endpoint]['group']
+        self.import_times[pkg][group] = import_time
+
+    def predict(self, pkg, endpoint):
+        group = self.endpoints[endpoint]['group']
+        return self.import_times[pkg][group]
+
+    def __call__(self, *args, **kwargs):
+        return self.predict(*args, **kwargs)
+
+    def to_file(self, file_name):
+        times = {pkg: dict(vs) for (pkg, vs) in self.import_times.items()}
+
+        with open(file_name, 'w') as fh:
+            json.dump({'import_times': times}, fh)
+
+    def _load_state_from_file(self, file_name):
+        with open(file_name) as fh:
+            data = json.load(fh)
+
+        for pkg, values in data.items():
+            for group, import_time in values.items():
+                self.import_times[pkg][group] = import_time
