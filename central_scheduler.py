@@ -32,7 +32,7 @@ class CentralScheduler(object):
 
     def __init__(self, endpoints, strategy='round-robin',
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
-                 log_level='INFO', transfer_model_file='transfer_model.json',
+                 log_level='INFO', transfer_model_file=None,
                  import_model_file=None, max_backups=0,
                  *args, **kwargs):
         self._fxc = FuncXClient(*args, **kwargs)

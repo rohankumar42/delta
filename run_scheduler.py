@@ -127,6 +127,10 @@ if __name__ == "__main__":
     parser.add_argument('--last-n', type=int, default=3)
     parser.add_argument('--train-every', type=int, default=1)
     parser.add_argument('-b', '--max-backups', type=int, default=0)
+    parser.add_argument('--transfer-model', type=str,
+                        default='transfer_model.json')
+    parser.add_argument('--import-model', type=str,
+                        default='import_model.json')
     parser.add_argument('--log-level', type=str, default='INFO')
     args = parser.parse_args()
 
@@ -140,6 +144,8 @@ if __name__ == "__main__":
                                  last_n=args.last_n,
                                  train_every=args.train_every,
                                  max_backups=args.max_backups,
+                                 transfer_model_file=args.transfer_model,
+                                 import_model_file=args.import_model,
                                  log_level=args.log_level)
 
     funcx_app.run(host='0.0.0.0', port=args.port, debug=args.debug,
