@@ -32,14 +32,15 @@ class CentralScheduler(object):
 
     def __init__(self, endpoints, strategy='round-robin',
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
-                 log_level='INFO', transfer_model_file=None,
-                 import_model_file=None,
+                 log_level='INFO', import_model_file=None,
+                 transfer_model_file=None, sync_level='exists',
                  max_backups=0, backup_delay_threshold=2.0,
                  *args, **kwargs):
         self._fxc = FuncXClient(*args, **kwargs)
 
         # Initialize a transfer client
         self._transfer_manger = TransferManager(endpoints=endpoints,
+                                                sync_level=sync_level,
                                                 log_level=log_level)
 
         # Info about FuncX endpoints we can execute on
@@ -67,6 +68,10 @@ class CentralScheduler(object):
         self.backup_delay_threshold = backup_delay_threshold
         self._latest_status = {}
         self._last_task_ETA = defaultdict(float)
+        # Maximum ETA, if any, of a task which we allow to be scheduled on an
+        # endpoint. This is to prevent backfill tasks to be longer than the
+        # estimated time for when a pending data transfer will finish.
+        self._transfer_ETAs = defaultdict(dict)
         # Estimated error in the pending-task time of an endpoint.
         # Updated every time a task result is received from an endpoint.
         self._queue_error = defaultdict(float)
@@ -186,8 +191,10 @@ class CentralScheduler(object):
         # logger.warn('{} endpoints seem dead. Hope they still work!'
         # .format(len(self._dead_endpoints)))
         # exclude = self._blocked[func] | set(self._endpoints_sent_to[task_id])
-        choice = self.strategy.choose_endpoint(func, payload, files=files,
-                                               exclude=exclude)
+        choice = self.strategy.choose_endpoint(func, payload=payload,
+                                               files=files,
+                                               exclude=exclude,
+                                               transfer_ETAs=self._transfer_ETAs)  # noqa
         endpoint = choice['endpoint']
         logger.debug('Choosing endpoint {} for func {}'
                      .format(endpoint_name(endpoint), func))
@@ -198,6 +205,8 @@ class CentralScheduler(object):
         if len(files) > 0:
             transfer_num = self._transfer_manger.transfer(files, endpoint,
                                                           task_id)
+            transfer_ETA = time.time() + self.transfer_time(files, endpoint)
+            self._transfer_ETAs[endpoint][transfer_num] = transfer_ETA
         else:
             transfer_num = None
             # Record endpoint ETA for queue-delay prediction here,
@@ -360,9 +369,12 @@ class CentralScheduler(object):
             # Filter out all tasks whose data transfer has not been completed
             ready_to_send = set()
             for task_id, info in scheduled.items():
-                if info['transfer_num'] is None or \
-                        self._transfer_manger.is_complete(info['transfer_num']):
+                transfer_num = info['transfer_num']
+                if transfer_num is None:
                     ready_to_send.add(task_id)
+                elif self._transfer_manger.is_complete(transfer_num):
+                    ready_to_send.add(task_id)
+                    del self._transfer_ETAs[info['endpoint_id']][transfer_num]
                 else:  # This task cannot be scheduled yet
                     continue
 

@@ -25,7 +25,8 @@ class Strategy(object):
         self.cold_start_predictor = cold_start_predictor
         self.transfer_predictor = transfer_predictor
 
-    def choose_endpoint(self, func, payload, files=None, exclude=None):
+    def choose_endpoint(self, func, payload, files=None, exclude=None,
+                        *args, **kwargs):
         raise NotImplementedError
 
     def add_endpoint(self, endpoint, group):
@@ -62,7 +63,7 @@ class RoundRobin(Strategy):
         super().__init__(*args, **kwargs)
         self.next = 0
 
-    def choose_endpoint(self, func, payload, files=None, exclude=None):
+    def choose_endpoint(self, func, exclude=None, *args, **kwargs):
         exclude = exclude or set()
         assert(len(exclude) < len(self.endpoints))
         endpoints = list(self.endpoints.keys())
@@ -86,7 +87,7 @@ class FastestEndpoint(Strategy):
             for g in self.groups
         }
 
-    def choose_endpoint(self, func, payload, files=None, exclude=None):
+    def choose_endpoint(self, func, payload, exclude=None, *args, **kwargs):
         exclude = exclude or set()
         assert(len(exclude) < len(self.endpoints))
         excluded_groups = {g for (g, ends) in self.group_to_endpoints.items()
@@ -130,7 +131,8 @@ class SmallestETA(Strategy):
             for g in self.groups
         }
 
-    def choose_endpoint(self, func, payload, files=None, exclude=None):
+    def choose_endpoint(self, func, payload, files=None, exclude=None,
+                        transfer_ETAs=None):
         exclude = exclude or set()
         assert(len(exclude) < len(self.endpoints))
         excluded_groups = {g for (g, ends) in self.group_to_endpoints.items()
@@ -164,6 +166,16 @@ class SmallestETA(Strategy):
             ETAs = [(ep, self.predict_ETA(func, ep, payload, files=files))
                     for ep in self.endpoints.keys() if ep not in exclude
                     and self.endpoints[ep]['group'] in times]
+
+            # Filter out endpoints which have a max-ETA allowed for scheduling
+            if transfer_ETAs is not None:
+                ETAs = [(ep, eta) for (ep, eta) in ETAs
+                        if len(transfer_ETAs[ep]) == 0
+                        or eta <= max(transfer_ETAs[ep])]
+
+            if len(ETAs) == 0:
+                raise ValueError('No endpoints left to choose from!')
+
             res['endpoint'], res['ETA'] = min(ETAs, key=lambda x: x[1])
 
         return res
