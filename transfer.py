@@ -7,7 +7,7 @@ from threading import Thread
 import globus_sdk
 from fair_research_login import NativeClient, JSONTokenStorage
 
-from utils import colored, endpoint_name
+from utils import colored, endpoint_name, MAX_CONCURRENT_TRANSFERS
 
 
 logger = logging.getLogger(__name__)
@@ -56,9 +56,9 @@ class TransferManager(object):
         self._tracker.start()
 
     def transfer(self, files_by_src, dst, task_id='', unique_name=False):
-        self._next += 1
-
         n = len(files_by_src)
+
+        empty_transfer = True
 
         transfer_ids = []
         for i, (src, pairs) in enumerate(files_by_src.items(), 1):
@@ -68,6 +68,8 @@ class TransferManager(object):
             if src == dst:
                 logger.debug(f'Skipped transfer from {src_name} to {dst_name}')
                 continue
+            else:
+                empty_transfer = False
 
             files, _ = zip(*pairs)
             logger.info(f'Transferring {src_name} to {dst_name}: {files}')
@@ -77,8 +79,8 @@ class TransferManager(object):
 
             tdata = globus_sdk.TransferData(self.transfer_client,
                                             src_globus, dst_globus,
-                                            label='Transfer {} - {} of {}'
-                                            .format(self._next, i, n),
+                                            label='FuncX Transfer {} - {} of {}'
+                                            .format(self._next + 1, i, n),
                                             sync_level=self.sync_level)
 
             for f in files:
@@ -105,14 +107,28 @@ class TransferManager(object):
             }
             transfer_ids.append(res['task_id'])
 
-        self.transfer_ids[self._next] = transfer_ids
+            if len(self.active_transfers) > MAX_CONCURRENT_TRANSFERS:
+                logger.warn('More than {} concurrent transfers! Expect delays.'
+                            .format(MAX_CONCURRENT_TRANSFERS))
 
-        return self._next
+        if empty_transfer:
+            return None
+        else:
+            self._next += 1
+            self.transfer_ids[self._next] = transfer_ids
+            return self._next
 
     def is_complete(self, num):
         assert(num <= self._next)
 
         return all(t in self.completed_transfers
+                   for t in self.transfer_ids[num])
+
+    def get_transfer_time(self, num):
+        if not self.is_complete(num):
+            raise ValueError('Cannot get transfer time of incomplete transfer')
+
+        return max(self.completed_transfers[t]['time_taken']
                    for t in self.transfer_ids[num])
 
     def wait(self, num):
@@ -142,7 +158,8 @@ class TransferManager(object):
                     continue
 
                 elif status['status'] == 'SUCCEEDED':
-                    logger.info(f'Globus transfer finished: {name}')
                     info['time_taken'] = time.time() - info['submission_time']
+                    logger.info('Globus transfer {} finished in time {}'
+                                .format(name, info['time_taken']))
                     self.completed_transfers[transfer_id] = info
                     del self.active_transfers[transfer_id]

@@ -184,15 +184,16 @@ class CentralScheduler(object):
                 'payload': payload,
                 'headers': headers,
                 'files': files,
+                'time_requested': time.time()
             }
             self._task_info[task_id] = info
 
         # TODO: do not choose a dead endpoint (reliably)
-        exclude = self._blocked[func] | self._dead_endpoints | set(self._endpoints_sent_to[task_id])  # noqa
-        # if len(self._dead_endpoints) > 0:
-        # logger.warn('{} endpoints seem dead. Hope they still work!'
-        # .format(len(self._dead_endpoints)))
-        # exclude = self._blocked[func] | set(self._endpoints_sent_to[task_id])
+        # exclude = self._blocked[func] | self._dead_endpoints | set(self._endpoints_sent_to[task_id])  # noqa
+        if len(self._dead_endpoints) > 0:
+            logger.warn('{} endpoints seem dead. Hope they still work!'
+                        .format(len(self._dead_endpoints)))
+        exclude = self._blocked[func] | set(self._endpoints_sent_to[task_id])
         choice = self.strategy.choose_endpoint(func, payload=payload,
                                                files=files,
                                                exclude=exclude,
@@ -207,8 +208,9 @@ class CentralScheduler(object):
         if len(files) > 0:
             transfer_num = self._transfer_manger.transfer(files, endpoint,
                                                           task_id)
-            transfer_ETA = time.time() + self.transfer_time(files, endpoint)
-            self._transfer_ETAs[endpoint][transfer_num] = transfer_ETA
+            if transfer_num is not None:
+                transfer_ETA = time.time() + self.transfer_time(files, endpoint)
+                self._transfer_ETAs[endpoint][transfer_num] = transfer_ETA
         else:
             transfer_num = None
             # Record endpoint ETA for queue-delay prediction here,
@@ -252,6 +254,7 @@ class CentralScheduler(object):
                         .format(name, real_task_id, runtime))
 
             self.runtime.update(self._pending[real_task_id], runtime)
+            self._pending[real_task_id]['runtime'] = runtime
             self._record_completed(real_task_id)
             self.last_result_time[endpoint] = time.time()
             self._imports[endpoint] = result['imports']
@@ -378,9 +381,11 @@ class CentralScheduler(object):
                 transfer_num = info['transfer_num']
                 if transfer_num is None:
                     ready_to_send.add(task_id)
+                    info['transfer_time'] = 0.0
                 elif self._transfer_manger.is_complete(transfer_num):
                     ready_to_send.add(task_id)
                     del self._transfer_ETAs[info['endpoint_id']][transfer_num]
+                    info['transfer_time'] = self._transfer_manger.get_transfer_time(transfer_num)  # noqa
                 else:  # This task cannot be scheduled yet
                     continue
 

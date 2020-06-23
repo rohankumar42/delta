@@ -3,7 +3,7 @@ from collections import defaultdict
 from predictors import RuntimePredictor, TransferPredictor
 
 
-FUNCX_LATENCY = 0.1  # Estimated overhead of executing task
+FUNCX_LATENCY = 0.3  # Estimated overhead of executing task
 
 
 class Strategy(object):
@@ -167,14 +167,17 @@ class SmallestETA(Strategy):
                     for ep in self.endpoints.keys() if ep not in exclude
                     and self.endpoints[ep]['group'] in times]
 
-            # Filter out endpoints which have a max-ETA allowed for scheduling
-            if transfer_ETAs is not None:
-                ETAs = [(ep, eta) for (ep, eta) in ETAs
-                        if len(transfer_ETAs[ep]) == 0
-                        or eta <= max(transfer_ETAs[ep])]
-
-            if len(ETAs) == 0:
-                raise ValueError('No endpoints left to choose from!')
+            # TODO: do backfilling properly, if at all
+            # # Filter out endpoints which have a max-ETA allowed for scheduling
+            # if transfer_ETAs is not None:
+            #     new_ETAs = [(ep, eta) for (ep, eta) in ETAs
+            #                 if len(transfer_ETAs[ep]) == 0
+            #                 or eta <= max(transfer_ETAs[ep])]
+            #     if len(new_ETAs) == 0:
+            #         print('No endpoints left to choose from! '
+            #               'Ignoring transfer ETAs.')
+            #     else:
+            #         ETAs = new_ETAs
 
             res['endpoint'], res['ETA'] = min(ETAs, key=lambda x: x[1])
 

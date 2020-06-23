@@ -3,7 +3,7 @@ import numpy as np
 from queue import Queue
 from collections import defaultdict
 
-from utils import avg, ENDPOINTS
+from utils import avg, ENDPOINTS, MAX_CONCURRENT_TRANSFERS
 
 
 class RuntimePredictor(object):
@@ -120,8 +120,6 @@ def init_runtime_predictor(predictor, *args, **kwargs):
 
 class TransferPredictor(object):
 
-    MAX_CONCURRENT_TRANSFERS = 3
-
     def __init__(self, endpoints=None, train_every=1, state_file=None):
         self.endpoints = endpoints or ENDPOINTS
         self.sizes = defaultdict(lambda: defaultdict(list))
@@ -148,7 +146,7 @@ class TransferPredictor(object):
         '''Predict the time for transfers from each source, and return
         the maximum. Assumption: all transfers will happen concurrently.'''
 
-        assert(len(files_by_src) <= self.MAX_CONCURRENT_TRANSFERS)
+        assert(len(files_by_src) <= MAX_CONCURRENT_TRANSFERS)
 
         if len(files_by_src) == 0:
             return 0.0

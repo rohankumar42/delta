@@ -12,6 +12,8 @@ except ImportError:
 with open('endpoints.yaml') as fh:
     ENDPOINTS = yaml.safe_load(fh)
 
+MAX_CONCURRENT_TRANSFERS = 15
+
 
 def avg(x):
     if isinstance(x, Queue):
