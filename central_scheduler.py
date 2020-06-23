@@ -33,7 +33,8 @@ class CentralScheduler(object):
     def __init__(self, endpoints, strategy='round-robin',
                  runtime_predictor='rolling-average', last_n=3, train_every=1,
                  log_level='INFO', transfer_model_file=None,
-                 import_model_file=None, max_backups=0,
+                 import_model_file=None,
+                 max_backups=0, backup_delay_threshold=2.0,
                  *args, **kwargs):
         self._fxc = FuncXClient(*args, **kwargs)
 
@@ -63,6 +64,7 @@ class CentralScheduler(object):
         # List of endpoints a (virtual) task was scheduled to
         self._endpoints_sent_to = defaultdict(list)
         self.max_backups = max_backups
+        self.backup_delay_threshold = backup_delay_threshold
         self._latest_status = {}
         self._last_task_ETA = defaultdict(float)
         # Estimated error in the pending-task time of an endpoint.
@@ -133,7 +135,7 @@ class CentralScheduler(object):
             return {'status': 'Success'}
 
     def register_imports(self, func, imports):
-        logger.info('Registered function {} with import {}'
+        logger.info('Registered function {} with imports {}'
                     .format(func, imports))
         self._imports_required[func] = imports
 
@@ -179,11 +181,11 @@ class CentralScheduler(object):
             self._task_info[task_id] = info
 
         # TODO: do not choose a dead endpoint (reliably)
-        # exclude = self._blocked[func] | self._dead_endpoints | | set(self._endpoints_sent_to[task_id])
-        if len(self._dead_endpoints) > 0:
-            logger.warn('{} endpoints seem dead. Hope they still work!'
-                        .format(len(self._dead_endpoints)))
-        exclude = self._blocked[func] | set(self._endpoints_sent_to[task_id])
+        exclude = self._blocked[func] | self._dead_endpoints | set(self._endpoints_sent_to[task_id])  # noqa
+        # if len(self._dead_endpoints) > 0:
+        # logger.warn('{} endpoints seem dead. Hope they still work!'
+        # .format(len(self._dead_endpoints)))
+        # exclude = self._blocked[func] | set(self._endpoints_sent_to[task_id])
         choice = self.strategy.choose_endpoint(func, payload, files=files,
                                                exclude=exclude)
         endpoint = choice['endpoint']
@@ -305,7 +307,8 @@ class CentralScheduler(object):
         # Stop tracking this task
         del self._pending[real_task_id]
         self._pending_by_endpoint[endpoint].remove(real_task_id)
-        del self._task_info[info['task_id']]
+        if info['task_id'] in self._task_info:
+            del self._task_info[info['task_id']]
 
     def cold_start(self, endpoint, func):
         # If endpoint is warm, there is no launch time
@@ -397,6 +400,12 @@ class CentralScheduler(object):
                 info['ETA'] = self.strategy.predict_ETA(info['function_id'],
                                                         info['endpoint_id'],
                                                         info['payload'])
+                # Record if this ETA prediction is "reliable". If it is not
+                # (e.g., when we have not learned about this (func, ep) pair),
+                # backup tasks will not be sent for this task if it is delayed.
+                info['is_ETA_reliable'] = self.runtime.has_learned(
+                    info['function_id'], info['endpoint_id'])
+
                 info['time_sent'] = time.time()
 
                 endpoint = info['endpoint_id']
@@ -445,9 +454,6 @@ class CentralScheduler(object):
                                     'Last heartbeat was {:.2f} seconds ago.'
                                     .format(endpoint_name(end), age))
 
-                    if is_dead:
-                        self._send_backups_if_needed(end)
-
                     # Mark endpoint as "cold" or "warm" depending on if it
                     # has active managers (nodes) allocated to it
                     if self.temperature[end] == 'WARM' \
@@ -461,26 +467,40 @@ class CentralScheduler(object):
                         logger.info('Endpoint {} is warm again!'
                                     .format(endpoint_name(end)))
 
+            # Send backup tasks if needed
+            self._send_backups_if_needed()
+
             # Sleep before checking statuses again
             time.sleep(5)
 
-    def _send_backups_if_needed(self, endpoint):
+    def _send_backups_if_needed(self):
         # Get all tasks which have not been completed yet and still have a
-        # pending (real) task on this endpoint
+        # pending (real) task on a dead endpoint
         task_ids = {
-            self._pending[t]['task_id']
-            for t in self._pending_by_endpoint[endpoint]
-            if self._pending[t]['task_id'] in self._task_info
+            self._pending[real_task_id]['task_id']
+            for endpoint in self._dead_endpoints
+            for real_task_id in self._pending_by_endpoint[endpoint]
+            if self._pending[real_task_id]['task_id'] in self._task_info
         }
 
-        if len(task_ids) > 0:
-            logger.info('Found {} tasks pending on dead endpoints'
-                        .format(len(task_ids)))
+        # Get all tasks for which we had ETA-predictions but haven't
+        # been completed even past their ETA
+        for real_task_id, info in self._pending.items():
+            # If the predicted ETA wasn't reliable, don't send backups
+            if not info['is_ETA_reliable']:
+                continue
+
+            expected = info['ETA'] - info['time_sent']
+            elapsed = time.time() - info['time_sent']
+
+            if elapsed / expected > self.backup_delay_threshold:
+                task_ids.add(info['task_id'])
 
         for task_id in task_ids:
             if len(self._endpoints_sent_to[task_id]) > self.max_backups:
                 logger.debug(f'Skipping sending new backup task for {task_id}')
             else:
+                logger.info(f'Sending new backup task for {task_id}')
                 info = self._task_info[task_id]
                 self._schedule_task(info['function_id'], info['payload'],
                                     info['headers'], info['files'], task_id)

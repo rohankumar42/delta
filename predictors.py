@@ -17,6 +17,11 @@ class RuntimePredictor(object):
     def update(self, task_info, new_runtime):
         raise NotImplementedError
 
+    def has_learned(self, func, endpoint):
+        '''Whether some learning has happened for this (func, endpoint) pair,
+        or whether we are still guessing.'''
+        raise NotImplementedError
+
     def __call__(self, *args, **kwargs):
         return self.predict(*args, **kwargs)
 
@@ -25,6 +30,8 @@ class RuntimePredictor(object):
 
 
 class RollingAverage(RuntimePredictor):
+
+    LEARNING_THRESH = 3
 
     def __init__(self, endpoints, last_n=3, *args, **kwargs):
         super().__init__(endpoints)
@@ -48,8 +55,14 @@ class RollingAverage(RuntimePredictor):
 
         self.num_executions[func][group] += 1
 
+    def has_learned(self, func, endpoint):
+        group = self.endpoints[endpoint]['group']
+        return self.num_executions[func][group] > self.LEARNING_THRESH
+
 
 class InputLength(RuntimePredictor):
+
+    LEARNING_THRESH = 3
 
     def __init__(self, endpoints, train_every=1, *args, **kwargs):
         # TODO: ensure that the number of data points stored stays under some
@@ -78,6 +91,10 @@ class InputLength(RuntimePredictor):
         if self.updates_since_train[func][group] >= self.train_every:
             self._train(func, group)
             self.updates_since_train[func][group] = 0
+
+    def has_learned(self, func, endpoint):
+        group = self.endpoints[endpoint]['group']
+        return len(self.runtimes[func][group]) > self.LEARNING_THRESH
 
     def _train(self, func, group):
         lengths = np.array([self._preprocess(x)
