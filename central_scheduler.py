@@ -1,3 +1,4 @@
+import sys
 import time
 import json
 import uuid
@@ -26,6 +27,7 @@ logger.addHandler(ch)
 FUNCX_API = 'https://dev.funcx.org/api/v1'
 HEARTBEAT_THRESHOLD = 75.0  # Endpoints send regular heartbeats
 CLIENT_ID = 'f06739da-ad7d-40bd-887f-abb1d23bbd6f'
+BLOCK_ERRORS = [ModuleNotFoundError, MemoryError]
 
 
 class CentralScheduler(object):
@@ -135,7 +137,7 @@ class CentralScheduler(object):
             }
         else:
             logger.info('Blocking endpoint {} for function {}'
-                        .format(endpoint, func))
+                        .format(endpoint_name(endpoint), func))
             self._blocked[func].add(endpoint)
             return {'status': 'Success'}
 
@@ -235,6 +237,7 @@ class CentralScheduler(object):
             return
 
         task_id = self._pending[real_task_id]['task_id']
+        func = self._pending[real_task_id]['function_id']
         endpoint = self._pending[real_task_id]['endpoint_id']
         # Don't overwrite latest status if it is a result/exception
         if task_id not in self._latest_status or \
@@ -260,6 +263,9 @@ class CentralScheduler(object):
             except Exception as e:
                 logger.error('Got exception on task {}: {}'
                              .format(real_task_id, e))
+                exc_type, _, _ = sys.exc_info()
+                if exc_type in BLOCK_ERRORS:
+                    self.block(func, endpoint)
 
             self._record_completed(real_task_id)
             self.last_result_time[endpoint] = time.time()
