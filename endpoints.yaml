@@ -1,0 +1,93 @@
+918212f9-c174-4731-affd-b56f4ed4033f:
+  group: fast_desktop_cpu
+  transfer_group: uchicago_fast
+  name: funcx_hawfinch
+  globus: c9353d00-ac58-11ea-9a3b-0255d23c44ef
+
+5d1918a3-4fce-4fe8-a96d-24cd1e66ff5f: 
+  group: avg_desktop_cpu
+  transfer_group: uchicago_slow
+  name: funcx_ryerson
+  globus: 7a2f57fa-a397-11ea-8f07-0a21f750d19b
+73c9e5bd-2a67-4bee-b6bf-09004f7d3cb4: 
+  group: slow_desktop_cpu
+  transfer_group: uchicago_slow
+  name: funcx_kestrel
+  globus: 155a7290-a399-11ea-8f07-0a21f750d19b
+
+27a8d33a-cbf1-410d-ae9e-10c2c93f6bf5:
+  group: raspberry_pi
+  name: funcx_pi_1
+e0e0959a-de69-4a44-ad2c-fd267c2485cb:
+  group: raspberry_pi
+  name: funcx_pi_2
+187d412b-f993-4a00-b1c3-9c623d181075:
+  group: raspberry_pi
+  name: funcx_pi_3
+
+7ff9c62e-9cc7-4b30-ba63-56229e490f48: 
+  group: aws_ec2
+  transfer_group: aws_slow
+  name: funcx_aws_1
+  globus: 7ea0fb22-b585-11ea-9a3b-0255d23c44ef
+
+f98d2666-7289-40b7-85fc-1a3cac6fa9d5: 
+  group: chameleon_cpu
+  transfer_group: chameleon
+  name: funcx_chameleon_cpu_1
+  globus: 9a63fabe-aff7-11ea-9a3b-0255d23c44ef
+755711bf-6ff8-455c-9d1b-7e890ffb1b6e: 
+  group: chameleon_cpu
+  transfer_group: chameleon
+  name: funcx_chameleon_cpu_2
+  globus: e2249796-b592-11ea-9a3b-0255d23c44ef
+
+390eca9e-bd7a-43d8-ba03-07804fd0b58e: 
+  group: chameleon_gpu
+  transfer_group: chameleon
+  name: funcx_chameleon_gpu_1
+  globus: e6cb2b56-b593-11ea-9a3b-0255d23c44ef
+93cafab3-ecb5-45a5-a850-de3d456be49f:
+  group: chameleon_gpu
+  transfer_group: chameleon
+  name: funcx_chameleon_gpu_2
+  globus: 0bffe984-b594-11ea-bef0-0e716405a293
+
+
+# fe2d91bb-a779-4dd4-93b1-12ef647436b5: 
+#   group: midway_cpu
+#   transfer_group: midway
+#   name: funcx_midway_1
+#   globus: 71d08960-a399-11ea-9a3a-0255d23c44ef
+#   launch_time: 20
+# 6fbe3d83-cf22-4941-ab95-81ecc93460f8: 
+#   group: midway_cpu
+#   transfer_group: midway
+#   name: funcx_midway_2
+#   globus: 71d08960-a399-11ea-9a3a-0255d23c44ef
+#   launch_time: 20
+
+# a0640067-1f66-41b2-95d6-588135e60b88: 
+  # group: midway_gpu
+  # transfer_group: midway
+  # name: funcx_midway_gpu_1
+  # globus: 71d08960-a399-11ea-9a3a-0255d23c44ef
+  # launch_time: 20
+# cfabafa3-b075-452b-8bfe-f764b97d5b2d:
+  # group: midway_gpu
+  # transfer_group: midway
+  # name: funcx_midway_gpu_2
+  # globus: 71d08960-a399-11ea-9a3a-0255d23c44ef
+  # launch_time: 20
+
+# 76e094df-c018-443b-86f9-13f88d7c927c: 
+#   group: midway_login
+#  transfer_group: midway
+#   globus: 71d08960-a399-11ea-9a3a-0255d23c44ef
+#   name: funcx_midway_login_1
+
+# 576ab4d8-64b9-44cd-9c77-f2e8ea7877ae:
+#   group: csil
+#   transfer_group: uchicago_fast
+#   name: funcx_csil_4
+#   globus: eb29b896-a389-11ea-8f07-0a21f750d19b
