@@ -24,7 +24,7 @@ ch.setFormatter(logging.Formatter(
 logger.addHandler(ch)
 
 
-FUNCX_API = 'https://dev.funcx.org/api/v1'
+FUNCX_API = 'https://funcx.org/api/v1'
 HEARTBEAT_THRESHOLD = 75.0  # Endpoints send regular heartbeats
 CLIENT_ID = 'f06739da-ad7d-40bd-887f-abb1d23bbd6f'
 BLOCK_ERRORS = [ModuleNotFoundError, MemoryError]
@@ -199,8 +199,8 @@ class CentralScheduler(object):
                                                exclude=exclude,
                                                transfer_ETAs=self._transfer_ETAs)  # noqa
         endpoint = choice['endpoint']
-        logger.debug('Choosing endpoint {} for func {}'
-                     .format(endpoint_name(endpoint), func))
+        logger.info('Choosing endpoint {} for func {}, task id {}'
+                    .format(endpoint_name(endpoint), func, task_id))
         choice['ETA'] = self.strategy.predict_ETA(func, endpoint, payload,
                                                   files=files)
 
@@ -409,7 +409,11 @@ class CentralScheduler(object):
 
             res_str = requests.post(f'{FUNCX_API}/submit', headers=headers,
                                     data=json.dumps(data))
-            res = json.loads(res_str.text)
+            try:
+                res = res_str.json()
+            except ValueError:
+                logger.error(f'Could not parse JSON from {res_str.text}')
+                continue
             if res['status'] != 'Success':
                 logger.error('Could not send tasks to FuncX. Got response: {}'
                              .format(res))

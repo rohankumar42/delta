@@ -40,7 +40,7 @@ def status(task_id):
     real_task_ids = SCHEDULER.translate_task_id(task_id)
     for real_task_id in real_task_ids:
         res = forward_request(request, route=f'/{real_task_id}/status')
-        SCHEDULER.log_status(real_task_id, json.loads(res.text))
+        SCHEDULER.log_status(real_task_id, res.json())
 
     return SCHEDULER.get_status(task_id)
 
@@ -56,11 +56,11 @@ def batch_status():
         real_data = json.dumps({'task_ids': list(real_task_ids)})
         res = forward_request(request, data=real_data)
         try:
-            for real_task_id, status in json.loads(res.text)['results'].items():
+            for real_task_id, status in res.json()['results'].items():
                 SCHEDULER.log_status(real_task_id, status)
-        except json.decoder.JSONDecodeError as e:
-            funcx_app.logger.warn(
-                f'Could not get batch result from {res.text}', e)
+        except ValueError:
+            funcx_app.logger.error(
+                f'Could not get batch result from {res.text}')
 
     res_data = {'response': 'batch', 'results': {}}
     for task_id in task_ids:
@@ -76,7 +76,7 @@ def batch_status():
 def reg_function():
     data = json.loads(request.data)
     res = forward_request(request)
-    func = json.loads(res.text)['function_uuid']
+    func = res.json()['function_uuid']
     SCHEDULER.register_imports(func, data['imports'])
     return res.text
 
